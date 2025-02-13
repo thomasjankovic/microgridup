@@ -1,4 +1,0 @@
-2024-04-03 19:30:24,508 - Logging status updates for /Users/austinchang/programming/repositories/microgridup/microgridup/data/projects/lehighauto_3mg.
-2024-04-03 19:30:24,508 - Rerunning existing project. DSS file not moved.
-2024-04-03 19:30:24,508 - Rerunning existing project. Load CSV file not moved.
-2024-04-03 19:30:24,509 - Rerunning existing project. Outages CSV file not moved.

@@ -1,0 +1,20 @@
+{
+    "modelType": "hostingCapacity",
+    "algorithm": "sandia1",
+    "AMIDataFileName": "input_mohcaData.csv",
+    "userAMIDisplayFileName": "input_mohcaData.csv",
+    "feederName1": "color_test",
+    "runModelBasedAlgorithm": "on",
+    "runAmiAlgorithm": "off",
+    "runDownlineAlgorithm": "off",
+    "model_basedHCMaxTestkw": 50000,
+    "dgInverterSetting": "constantPF",
+    "der_pf": 1.0,
+    "vv_points": "0.8,0.44,0.92,0.44,0.98,0,1.02,0,1.08,-0.44,1.2,-0.44",
+    "load_pf_est": 1.0,
+    "created": "2025-02-13 09:42:56.703115",
+    "traditionalHCMaxTestkw": 11348.18499404,
+    "runStartTime": "2025-02-13T09:42:56.753515",
+    "runtimeEst_min": 1.0,
+    "runTime": "0:00:00"
+}
