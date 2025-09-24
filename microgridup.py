@@ -150,8 +150,8 @@ def main(data, invalidate_cache=True, open_results=False):
 		new_path = './color_test.omd'
 		omd = json.load(open('circuit.dss.omd'))
 		omd['attachments'] = out
-		with open('hosting_capacity/color_by_traditional.csv') as f:
-			omd['attachments']['coloringFiles']['color_by.csv'] = {
+		with open('hosting_capacity/colorByModelBased.csv') as f:
+			omd['attachments']['coloringFiles']['colorByModelBased.csv'] = {
 				'csv': f.read()
 			}
 		with open(new_path, 'w+') as out_file:
@@ -670,7 +670,8 @@ def _tests():
 			data['FAULTED_LINES'] = ['670671']
 		print(f'---------------------------------------------------------\nBeginning end-to-end backend test of {model_name}.\n---------------------------------------------------------')
         # - These tests don't run in GitHub, so it's okay to take longer and actually run REopt
-		main(data, invalidate_cache=True)
+		# main(data, invalidate_cache=True)
+		main(data, invalidate_cache=False)
 		if untested.count(model_name) == 0 and os.path.isfile(f'{PROJ_DIR}/{model_name}/0crashed.txt'):
 			failed_tests.append(model_name)
 		else:

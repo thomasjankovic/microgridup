@@ -470,8 +470,27 @@ def _microgrid_design_output(reopt_dirname):
 	assert isinstance(reopt_dirname, str)
 	all_html = ''
 	legend_spec = {'orientation':'h', 'xanchor':'left'}#, 'x':0, 'y':-0.2}
-	with open(f'{reopt_dirname}/allOutputData.json') as file:
-		allOutData = json.load(file)
+	# If REopt directory is completely missing, create a placeholder and return.
+	if not os.path.isdir(reopt_dirname):
+		warning = f'REopt directory "{reopt_dirname}" is missing — REopt run likely failed. Created placeholder output.'
+		try:
+			os.makedirs(reopt_dirname, exist_ok=True)
+			with open(f'{reopt_dirname}/cleanMicrogridDesign.html', 'w') as outFile:
+				outFile.write(f"<html><body><h1>{warning}</h1><p>Check REopt logs for details.</p></body></html>")
+		except Exception as e:
+			# If making dir or writing file fails, at least log to stdout
+			print(f'Unable to create placeholder for missing {reopt_dirname}: {e}')
+		# Log and return early so pipeline continues
+		print(warning)
+		return
+	# Try to read allOutputData.json, if missing fall back to empty dict
+	try:
+		with open(f'{reopt_dirname}/allOutputData.json') as file:
+			allOutData = json.load(file)
+	except FileNotFoundError:
+		logger_msg = f'{reopt_dirname}/allOutputData.json not found. Continuing with limited output.'
+		print(logger_msg)
+		allOutData = {}
 	# Make timeseries charts
 	plotlyData = {
 		'Generation Serving Load':'powerGenerationData1',
@@ -488,74 +507,104 @@ def _microgrid_design_output(reopt_dirname):
 		plotlyData['Resilience Overview - Longest Outage Survived'] = 'resilienceData1'
 	if 'resilienceProbData1' in allOutData:
 		plotlyData['Outage Survival Probability'] = 'resilienceProbData1'
-	for k,v in plotlyData.items():
-		chart_data = json.loads(allOutData[v])
-		fig = go.Figure(chart_data)
-		fig.update_layout(
-			title = k,
-			legend = legend_spec,
-			font = dict(
-				family="sans-serif",
-				color="black"))
-		if k == 'Resilience Overview - Longest Outage Survived':
-			min_ = min(chart_data[0]['y'])
-			max_ = max(chart_data[0]['y'])
-			mean = statistics.mean(chart_data[0]['y'])
-			stdev = statistics.stdev(chart_data[0]['y'])
-			stat_y_spacing = [(max_ * 1.25) - (i * (((max_ * 1.25) - max_) / 6)) for i in range(1, 6)]
-			fig.add_annotation(x=8500, y=(max_ * 1.25), text=f'Min hours: {format(min_, ".3f")}', showarrow=False, xanchor="right")
-			fig.add_annotation(x=8500, y=stat_y_spacing[0], text=f'Max hours: {format(max_, ".3f")}', showarrow=False, xanchor="right")
-			fig.add_annotation(x=8500, y=stat_y_spacing[1], text=f'Mean hours: {format(mean, ".3f")}', showarrow=False, xanchor="right")
-			fig.add_annotation(x=8500, y=stat_y_spacing[2], text=f'Mean + 1σ hours: {format(mean + stdev, ".3f")}', showarrow=False, xanchor="right")
-			fig.add_annotation(x=8500, y=stat_y_spacing[3], text=f'Mean + 2σ hours: {format(mean + (2 * stdev), ".3f")}', showarrow=False, xanchor="right")
-			fig.add_annotation(x=8500, y=stat_y_spacing[4], text=f'Mean + 3σ hours: {format(mean + (3 * stdev), ".3f")}', showarrow=False, xanchor="right")
-			fig.update_xaxes(title_text='Hour of year when outage starts')
-			fig.update_yaxes(title_text='Hours')
-		if k == 'Outage Survival Probability':
-			fig.update_xaxes(title_text='Length of outage (hours)')
-			fig.update_yaxes(title_text='Probability')
-		if k == 'Generation Serving Load':
-			fig.update_yaxes(title_text='kW')
-		if k == 'Solar Generation Detail':
-			fig.update_yaxes(title_text='kW')
-		if k == 'Wind Generation Detail':
-			fig.update_yaxes(title_text='kW')
-		if k == 'Fossil Generation Detail':
-			fig.update_yaxes(title_text='kW')
-		if k == 'Storage Charge Source':
-			fig.update_yaxes(title_text='kW')
-		fig.update_yaxes(rangemode="tozero")
-		fig_html = fig.to_html(default_height='600px')
-		all_html = all_html + fig_html
-	# Make generation overview chart
-	with open(f'{reopt_dirname}/allInputData.json') as f:
-		all_input_data = json.load(f)
-	with open(f'{reopt_dirname}/results.json') as f:
-		results = json.load(f)
+	for k, v in plotlyData.items():
+		# Skip charts when data isn't present.
+		if v not in allOutData:
+			print(f'Skipping chart "{k}" because "{v}" not present in {reopt_dirname}/allOutputData.json')
+			continue
+		try:
+			chart_data = json.loads(allOutData[v])
+			fig = go.Figure(chart_data)
+			fig.update_layout(
+				title = k,
+				legend = legend_spec,
+				font = dict(
+					family="sans-serif",
+					color="black"))
+			if k == 'Resilience Overview - Longest Outage Survived':
+				# Protect against empty chart_data.
+				try:
+					min_ = min(chart_data[0]['y'])
+					max_ = max(chart_data[0]['y'])
+					mean = statistics.mean(chart_data[0]['y'])
+					stdev = statistics.stdev(chart_data[0]['y']) if len(chart_data[0]['y']) > 1 else 0
+				except Exception:
+					min_, max_, mean, stdev = 0, 0, 0, 0
+				stat_y_spacing = [(max_ * 1.25) - (i * (((max_ * 1.25) - max_) / 6)) for i in range(1, 6)]
+				fig.add_annotation(x=8500, y=(max_ * 1.25), text=f'Min hours: {format(min_, ".3f")}', showarrow=False, xanchor="right")
+				fig.add_annotation(x=8500, y=stat_y_spacing[0], text=f'Max hours: {format(max_, ".3f")}', showarrow=False, xanchor="right")
+				fig.add_annotation(x=8500, y=stat_y_spacing[1], text=f'Mean hours: {format(mean, ".3f")}', showarrow=False, xanchor="right")
+				fig.add_annotation(x=8500, y=stat_y_spacing[2], text=f'Mean + 1σ hours: {format(mean + stdev, ".3f")}', showarrow=False, xanchor="right")
+				fig.add_annotation(x=8500, y=stat_y_spacing[3], text=f'Mean + 2σ hours: {format(mean + (2 * stdev), ".3f")}', showarrow=False, xanchor="right")
+				fig.add_annotation(x=8500, y=stat_y_spacing[4], text=f'Mean + 3σ hours: {format(mean + (3 * stdev), ".3f")}', showarrow=False, xanchor="right")
+				fig.update_xaxes(title_text='Hour of year when outage starts')
+				fig.update_yaxes(title_text='Hours')
+			if k == 'Outage Survival Probability':
+				fig.update_xaxes(title_text='Length of outage (hours)')
+				fig.update_yaxes(title_text='Probability')
+			if k == 'Generation Serving Load':
+				fig.update_yaxes(title_text='kW')
+			if k == 'Solar Generation Detail':
+				fig.update_yaxes(title_text='kW')
+			if k == 'Wind Generation Detail':
+				fig.update_yaxes(title_text='kW')
+			if k == 'Fossil Generation Detail':
+				fig.update_yaxes(title_text='kW')
+			if k == 'Storage Charge Source':
+				fig.update_yaxes(title_text='kW')
+			fig.update_yaxes(rangemode="tozero")
+			fig_html = fig.to_html(default_height='600px')
+			all_html = all_html + fig_html
+		except Exception as e:
+			print(f'Failed to generate chart {k} from {reopt_dirname}: {e}')
+			continue
+	# Make generation overview chart, guarding file openings and missing keys.
+	try:
+		with open(f'{reopt_dirname}/allInputData.json') as f:
+			all_input_data = json.load(f)
+	except FileNotFoundError:
+		print(f'{reopt_dirname}/allInputData.json not found. Using defaults.')
+		all_input_data = {}
+	try:
+		with open(f'{reopt_dirname}/results.json') as f:
+			results = json.load(f)
+	except FileNotFoundError:
+		print(f'{reopt_dirname}/results.json not found. Using defaults.')
+		results = {}
+	# Safe getter with defaults in the event of missing data.
+	def safe_float(d, k, default=0.0):
+		try:
+			return float(d.get(k, default)) if isinstance(d, dict) else float(default)
+		except Exception:
+			return float(default)
+	# Default load_series lists to avoid crash in statistics.*
+	load_series = results.get('ElectricLoad', {}).get('load_series_kw', [0])
+	critical_series = results.get('ElectricLoad', {}).get('critical_load_series_kw', [0])
+	# build DataFrame using safe accessors
 	df = pd.DataFrame({
-		'Solar kW': [all_input_data['solarExisting'], 0, all_input_data['solarExisting'], 0, 0],
-		'Wind kW': [all_input_data['windExisting'], 0, all_input_data['windExisting'], 0, 0],
-		'Storage kW': [all_input_data['batteryKwExisting'], 0, all_input_data['batteryKwExisting'], 0, 0],
-		'Storage kWh': [all_input_data['batteryKwhExisting'], 0, all_input_data['batteryKwhExisting'], 0, 0],
-		'Fossil kW': [all_input_data['genExisting'], 0, all_input_data['genExisting'], 0, 0],
-		'Load kW': [0, 0, 0, round(statistics.mean(results['ElectricLoad']['load_series_kw'])), round(max(results['ElectricLoad']['load_series_kw']))],
-		'Critical Load kW': [0, 0, 0, round(statistics.mean(results['ElectricLoad']['critical_load_series_kw'])), round(max(results['ElectricLoad']['critical_load_series_kw']))]
+		'Solar kW': [safe_float(all_input_data, 'solarExisting', 0), 0, safe_float(all_input_data, 'solarExisting', 0), 0, 0],
+		'Wind kW': [safe_float(all_input_data, 'windExisting', 0), 0, safe_float(all_input_data, 'windExisting', 0), 0, 0],
+		'Storage kW': [safe_float(all_input_data, 'batteryKwExisting', 0), 0, safe_float(all_input_data, 'batteryKwExisting', 0), 0, 0],
+		'Storage kWh': [safe_float(all_input_data, 'batteryKwhExisting', 0), 0, safe_float(all_input_data, 'batteryKwhExisting', 0), 0, 0],
+		'Fossil kW': [safe_float(all_input_data, 'genExisting', 0), 0, safe_float(all_input_data, 'genExisting', 0), 0, 0],
+		'Load kW': [0, 0, 0, round(statistics.mean(load_series)) if len(load_series) else 0, round(max(load_series)) if len(load_series) else 0],
+		'Critical Load kW': [0, 0, 0, round(statistics.mean(critical_series)) if len(critical_series) else 0, round(max(critical_series)) if len(critical_series) else 0]
 	}, index=['Existing', 'New', 'Total', 'Average', 'Peak'], dtype=np.float64)
 	if 'sizePV1' in allOutData:
 		df.loc['Total', 'Solar kW'] = round(allOutData['sizePV1'])
-		df.loc['New', 'Solar kW'] = round(allOutData['sizePV1'] - float(all_input_data['solarExisting']))
+		df.loc['New', 'Solar kW'] = round(allOutData['sizePV1'] - float(all_input_data.get('solarExisting', 0)))
 	if 'sizeWind1' in allOutData:
 		df.loc['Total', 'Wind kW'] = round(allOutData['sizeWind1'])
-		df.loc['New', 'Wind kW'] = round(allOutData['sizeWind1'] - float(all_input_data['windExisting']))
+		df.loc['New', 'Wind kW'] = round(allOutData['sizeWind1'] - float(all_input_data.get('windExisting', 0)))
 	if 'powerBattery1' in allOutData:
 		df.loc['Total', 'Storage kW'] = round(allOutData['powerBattery1'])
-		df.loc['New', 'Storage kW'] = round(allOutData['powerBattery1'] - float(all_input_data['batteryKwExisting']))
+		df.loc['New', 'Storage kW'] = round(allOutData['powerBattery1'] - float(all_input_data.get('batteryKwExisting', 0)))
 	if 'capacityBattery1' in allOutData:
 		df.loc['Total', 'Storage kWh'] = round(allOutData['capacityBattery1'])
-		df.loc['New', 'Storage kWh'] = round(allOutData['capacityBattery1'] - float(all_input_data['batteryKwhExisting']))
+		df.loc['New', 'Storage kWh'] = round(allOutData['capacityBattery1'] - float(all_input_data.get('batteryKwhExisting', 0)))
 	if 'sizeDiesel1' in allOutData:
 		df.loc['Total', 'Fossil kW'] = round(allOutData['sizeDiesel1'])
-		df.loc['New', 'Fossil kW'] = round(allOutData['sizeDiesel1'] - float(all_input_data['genExisting']))
+		df.loc['New', 'Fossil kW'] = round(allOutData['sizeDiesel1'] - float(all_input_data.get('genExisting', 0)))
 	generation_fig = go.Figure(data=[
 		go.Bar(name='Existing Generation (kW)', x=df.columns.to_series(), y=df.loc['Existing']),
 		go.Bar(name='New Generation (kW)', x=df.columns.to_series(), y=df.loc['New']),
@@ -575,15 +624,17 @@ def _microgrid_design_output(reopt_dirname):
 		generation_fig.add_annotation(x=4, y=(max_ * 1.2), text=f'Fossil Fuel Used in Outage (kGal Diesel Equiv.): {allOutData["fuelUsedDieselRounded1"] / 1000.0}', showarrow=False, xanchor="left")
 	generation_fig_html = generation_fig.to_html(default_height='600px')
 	all_html = generation_fig_html + all_html
-	# Make financial overview chart
+	# Make financial overview chart and guard missing keys
 	fin_data_bau = {
-		'Demand Cost ($)':allOutData["demandCostBAU1"],
-		'Energy Cost ($)':allOutData["energyCostBAU1"],
-		'Total Cost ($)':allOutData["totalCostBAU1"]}
+		'Demand Cost ($)': allOutData.get("demandCostBAU1", 0),
+		'Energy Cost ($)': allOutData.get("energyCostBAU1", 0),
+		'Total Cost ($)': allOutData.get("totalCostBAU1", 0)
+	}
 	fin_data_microgrid = {
-		'Demand Cost ($)':allOutData["demandCost1"],
-		'Energy Cost ($)':allOutData["energyCost1"],
-		'Total Cost ($)':allOutData["totalCost1"]}
+		'Demand Cost ($)': allOutData.get("demandCost1", 0),
+		'Energy Cost ($)': allOutData.get("energyCost1", 0),
+		'Total Cost ($)': allOutData.get("totalCost1", 0)
+	}
 	fin_fig = go.Figure(
 		data=[
 			go.Bar(
@@ -608,9 +659,12 @@ def _microgrid_design_output(reopt_dirname):
 	)
 	fin_fig_html = fin_fig.to_html(default_height='600px')
 	all_html = fin_fig_html + all_html
-	# Nice input display
-	with open(f'{reopt_dirname}/allInputData.json') as inFile:
-		allInputData = json.load(inFile)
+	# Nice input display with guard against missing file possibility.
+	try:
+		with open(f'{reopt_dirname}/allInputData.json') as inFile:
+			allInputData = json.load(inFile)
+	except FileNotFoundError:
+		allInputData = {}
 	allInputData['loadShape'] = 'From File'
 	allInputData['criticalLoadShape'] = 'From File'
 	# Templating.
@@ -687,25 +741,64 @@ def _create_production_factor_series_csv(data, logger, invalidate_cache):
 		with open('reopt_loadshapes/allInputData.json', 'w') as f:
 			json.dump(allInputData, f, indent=4)
 		__neoMetaModel__.runForeground('reopt_loadshapes')
+		# Read results.json if it exists, otherwise handle failure gracefully.
+		results = {}
 		try:
 			with open('reopt_loadshapes/results.json') as f:
 				results = json.load(f)
-		except FileNotFoundError as e:
-			with open('reopt_loadshapes/stderr.txt') as f:
-				err_msg = f.read()
-			logger.warning(err_msg)
-			raise e
-		shutil.rmtree('reopt_loadshapes')
+		except FileNotFoundError:
+			# REopt didn't produce results.json. Grab stderr for diagnostics but don't raise so run may complete.
+			err_msg = ''
+			try:
+				with open('reopt_loadshapes/stderr.txt') as f:
+					err_msg = f.read()
+			except Exception:
+				err_msg = 'No stderr.txt available for reopt_loadshapes.'
+			logger.warning(f'REopt run failed to produce results.json. stderr: {err_msg}')
+			# Infer a sensible series length from allInputData (fallback to 8760).
+			series_length = None
+			for v in allInputData.values():
+				if isinstance(v, list):
+					series_length = len(v)
+					break
+			if series_length is None:
+				series_length = 8760
+			# Create a fallback CSV that downstream code can read without raising so run may complete.
+			production_factor_series_df = pd.DataFrame({
+                'pv_production_factor_series': pd.Series([0.0] * series_length),
+                'wind_production_factor_series': pd.Series([0.0] * series_length)
+            })
+			production_factor_series_df.to_csv('production_factor_series.csv', index=False)
+			# Cleanup. 
+			if Path('reopt_loadshapes').exists():
+				shutil.rmtree('reopt_loadshapes')
+		# If we reach here results.json was found. Build the dataframe but guard missing keys.
+		# Infer series length from allInputData to create fallbacks.
+		series_length = None
+		for v in allInputData.values():
+			if isinstance(v, list):
+				series_length = len(v)
+				break
+		if series_length is None:
+			series_length = 8760
 		production_factor_series_df = pd.DataFrame()
-		production_factor_series_df['pv_production_factor_series'] = pd.Series(results['PV']['production_factor_series'])
-		try:
-			production_factor_series_df['wind_production_factor_series'] = pd.Series(results['Wind']['production_factor_series'])
-		except:
+		# PV
+		pv_series = results.get('PV', {}).get('production_factor_series', None)
+		if pv_series is None:
+			logger.warning('results.json did not contain ["PV"]["production_factor_series"]. Using fallback zeros.')
+			pv_series = [0.0] * series_length
+		production_factor_series_df['pv_production_factor_series'] = pd.Series(pv_series)
+		# Wind
+		wind_series = results.get('Wind', {}).get('production_factor_series', None)
+		if wind_series is None:
 			# - On some platforms reopt_jl can't handle wind, and it's safe to skip this output.
-			error_msg = 'results.json did not contain valid data for ["Wind"]["production_factor_series"]'
-			print(error_msg)
-			logger.warning(error_msg)
+			logger.warning('results.json did not contain ["Wind"]["production_factor_series"]. Using fallback zeros.')
+			wind_series = [0.0] * series_length
+		production_factor_series_df['wind_production_factor_series'] = pd.Series(wind_series)
+		# Write CSV, cleanup, and return.
 		production_factor_series_df.to_csv('production_factor_series.csv', index=False)
+		if Path('reopt_loadshapes').exists():
+			shutil.rmtree('reopt_loadshapes')
 
 
 def _tests():

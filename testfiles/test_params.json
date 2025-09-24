@@ -548,7 +548,7 @@
         }
     ],
     "MICROGRIDS": {
-        "3mgs_wizard_branch": [
+        "3mgs-wizard-branch": [
             {
                 "mg0": {
                     "loads": [
@@ -613,7 +613,7 @@
             },
             "branch"
         ],
-        "3mgs_wizard_bottomup": [
+        "3mgs-wizard-bottomup": [
             {
                 "mg0": {
                     "loads": [
@@ -678,7 +678,7 @@
             },
             "bottomUp"
         ],
-        "3mgs_wizard_criticalloads": [
+        "3mgs-wizard-criticalloads": [
             {
                 "mg0": {
                     "loads": [
@@ -721,7 +721,7 @@
             },
             "criticalLoads"
         ],
-        "3mgs_wizard_loadgrouping": [
+        "3mgs-wizard-loadgrouping": [
             {
                 "mg0": {
                     "loads": [
@@ -769,16 +769,16 @@
             },
             "loadGrouping"
         ],
-        "3mgs_wizard_manual": [
+        "3mgs-wizard-manual": [
             {
                 "mg0": {
                     "loads": [
                         "634a_data_center", 
-                        "634b_radar",
+                        "634b_radar", 
                         "634c_atc_tower"
                     ], 
-                    "switch": "632633", 
-                    "gen_bus": "634", 
+                    "switch": "reg0", 
+                    "gen_bus": "reg0_end", 
                     "gen_obs_existing": [
                         "solar_634_existing", 
                         "battery_634_existing"
@@ -793,8 +793,8 @@
                         "675b_residential1", 
                         "675c_residential1"
                     ], 
-                    "switch": "671692", 
-                    "gen_bus": "675", 
+                    "switch": "reg1", 
+                    "gen_bus": "reg1_end", 
                     "gen_obs_existing": [
                         "fossil_675_existing"
                     ],
@@ -807,8 +807,8 @@
                         "645_hangar", 
                         "646_office"
                     ], 
-                    "switch": "632645", 
-                    "gen_bus": "646", 
+                    "switch": "reg2", 
+                    "gen_bus": "reg2_end", 
                     "gen_obs_existing": [],
                     "parameter_overrides": {
                         "reopt_inputs": {}
@@ -817,7 +817,7 @@
             },
             "manual"
         ],
-        "3mgs_lehigh_branch": [
+        "3mgs-lehigh-branch": [
             {
                 "mg0": {
                     "loads": [
@@ -874,7 +874,7 @@
             },
             "branch"
         ],
-        "3mgs_lehigh_bottomup": [
+        "3mgs-lehigh-bottomup": [
             {
                 "mg0": {
                     "loads": [
@@ -931,7 +931,7 @@
             },
             "bottomUp"
         ],
-        "3mgs_lehigh_criticalloads": [
+        "3mgs-lehigh-criticalloads": [
             {
                 "mg0": {
                     "loads": [
@@ -974,7 +974,7 @@
             },
             "criticalLoads"
         ],
-        "3mgs_lehigh_loadgrouping": [
+        "3mgs-lehigh-loadgrouping": [
             {
                 "mg0": {
                     "loads": [
@@ -1022,7 +1022,7 @@
             },
             "loadGrouping"
         ],
-        "3mgs_lehigh_manual": [
+        "3mgs-lehigh-manual": [
             {
                 "mg0": {
                     "loads": [

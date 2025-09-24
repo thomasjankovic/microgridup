@@ -155,7 +155,7 @@ def run_hosting_capacity():
 	with open('hosting_capacity/allOutputData.json') as f:
 		data = json.load(f)
 	# - Organize graph data
-	kw_capacity_per_bus = data['model_basedHCResults']
+	kw_capacity_per_bus = data['modelBasedHCResults']
 	tree = dssConvert.dssToTree('circuit.dss')
 	kw_load_and_gen_per_bus = {}
 	for d in tree:
