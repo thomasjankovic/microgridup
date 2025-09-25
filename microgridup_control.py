@@ -65,21 +65,95 @@ NATURAL_GAS_CONSUMPTION_MMBTU = np.array([
     [4482, 7332, 10147, 12780]
 ]) * CUBIC_FT_TO_MMBTU
 
+def _parse_bus_field(bus_field):
+	'''
+	Parse a bus-like field which can be:
+	  - 'reg0_end.1.2.3'
+	  - '[bus1,bus2]'
+	  - 'reg0_end'
+	  - ['reg0_end.1.2.3'] (list)
+	Return a list of bus names (without phase suffixes).
+	'''
+	if bus_field is None:
+		return []
+	# If it's a Python list, join into comma string.
+	if isinstance(bus_field, (list, tuple)):
+		# Take strings in list.
+		bus_field = ','.join([str(x) for x in bus_field if x])
+	b = str(bus_field).strip()
+	# Bracketed list form.
+	if b.startswith('[') and b.endswith(']'):
+		inner = b[1:-1]
+		parts = [p.strip().split('.')[0] for p in inner.split(',') if p.strip()]
+		return parts
+	# Comma separated.
+	if ',' in b:
+		parts = [p.strip().split('.')[0] for p in b.split(',') if p.strip()]
+		return parts
+	# Single entry maybe with phases: split on '.' and return head.
+	return [b.split('.')[0]]
+
 def get_first_nodes_of_mgs(dssTree, microgrids):
+	'''
+	Find the "first node" (bus) for each microgrid based on the switch.
+	Returns dict mapping microgrid key -> bus name (string).
+	'''
 	nodes = {}
 	for key in microgrids:
-		switch = microgrids[key]['switch']
-		if type(switch) is list:
-			switch = switch[-1] if switch[-1] else switch[0]
-		bus2 = [obj.get('bus2') for obj in dssTree if f'line.{switch}' in obj.get('object','')]
-		if not bus2:
-			bus2 = [obj.get('buses') for obj in dssTree if f'transformer.{switch}' in obj.get('object','')]
-			bus2 = [bus2[0][1:-1].split(',')[1]]
-		bus2 = bus2[0].split('.')[0]
-		nodes[key] = bus2
+		switch = microgrids[key].get('switch')
+		# Normalize switch in case it is a list.
+		if isinstance(switch, (list, tuple)):
+			# Prefer last non-empty, otherwise first.
+			switch = next((s for s in reversed(switch) if s), switch[0] if switch else None)
+		if switch is None:
+			# Fallback to empty string and notify user.
+			switch = ''
+			print(f'Error: switch for microgrid {key} could not be found. Fallback to empty string.')
+		found = None
+		# Look for line objects that reference this switch (object names can be 'line', 'line.<name>', or similar).
+		for obj in dssTree:
+			obj_type = obj.get('object', '')
+			# We accept 'line', 'line.name', or object that contains 'line'.
+			if 'line' in obj_type:
+				# Quick matches: explicit name or embedded suffix.
+				if obj.get('name') == switch or obj_type.endswith(f'.{switch}') or f'.{switch}' in obj_type:
+					parts = _parse_bus_field(obj.get('bus2') or obj.get('buses') or obj.get('bus'))
+					if len(parts) >= 2:
+						found = parts[1]
+					elif len(parts) == 1:
+						found = parts[0]
+					if found:
+						break
+		# It's possible that the switch is a transformer object. 
+		if found is None:
+			for obj in dssTree:
+				obj_type = obj.get('object', '')
+				if 'transformer' in obj_type or obj_type.startswith('transformer'):
+					buses_field = obj.get('buses') or obj.get('bus') or obj.get('bus2')
+					if buses_field:
+						bstr = str(buses_field)
+						# If switch appears anywhere relevant, pick second bus as "downstream"
+						if switch == obj.get('name') or switch in obj_type or switch in bstr:
+							parts = _parse_bus_field(buses_field)
+							# If transformer buses list, second element is downstream by convention
+							if len(parts) >= 2:
+								found = parts[1]
+							elif len(parts) == 1:
+								found = parts[0]
+							if found:
+								break
+		# Fallback: use gen_bus if available (useful for manual mg definitions)
+		if found is None:
+			found = microgrids[key].get('gen_bus') or ''
+			print(f'Error: no first node found for microgrid {key}. Defaulting to {found}.')
+		nodes[key] = found
 	return nodes
 
 def get_all_mg_elements(dssPath, microgrids, omdPath=None):
+	'''
+	Compute all elements in each microgrid by starting from the 'first node' and collecting descendants. If the starting node is missing from the graph, fall back to using explicit microgrid load/gen lists.
+	'''
+	# Build dssTree and networkx graph.
 	if not dssPath:
 		dssTree = dssConvert.omdToTree(omdPath)
 		G = dssConvert.dss_to_networkx(None, dssTree)
@@ -89,17 +163,47 @@ def get_all_mg_elements(dssPath, microgrids, omdPath=None):
 	first_nodes = get_first_nodes_of_mgs(dssTree, microgrids)
 	all_mg_elements = {}
 	for key in first_nodes:
-		N = nx.descendants(G, first_nodes[key])
-		N.add(first_nodes[key])
+		start_node = first_nodes[key]
+		N = set()
+		# If the start_node exists in graph, use descendants.
+		if start_node and start_node in G:
+			desc = nx.descendants(G, start_node)
+			N = set(desc)
+			N.add(start_node)
+		else:
+			# Fallback: use explicit lists from microgrids (loads and gen_obs_existing and gen_bus).
+			print(f'Error finding first node {start_node} of microgrid {key} using NetworkX. Defaulting to microgrid definition.')
+			mg = microgrids.get(key, {})
+			loads = mg.get('loads', []) or []
+			gen_obs_existing = mg.get('gen_obs_existing', []) or []
+			gen_bus = [mg.get('gen_bus')] if mg.get('gen_bus') else []
+			for item in loads + gen_obs_existing + gen_bus:
+				if item:
+					N.add(item)
+		# Collect transformers that connect inside/outside the set
 		transformers = set()
 		for obj in dssTree:
-			if 'transformer.' in obj.get('object',''):
-				buses = obj.get('buses')[1:-1].split(',')
-				if (buses[0].split('.')[0] in N or buses[0].split('.')[0] in first_nodes[key]) and buses[1].split('.')[0] in N:
-					transformers.add(obj.get('object').split('.')[1])
-		# all_mg_elements[key] = G.subgraph(N)
-		all_mg_elements[key] = N.union(transformers)
-	# print('all_mg_elements',all_mg_elements, 'first_nodes',first_nodes)
+			if 'transformer' in obj.get('object',''):
+				buses_field = obj.get('buses')
+				if not buses_field:
+					continue
+				buses = _parse_bus_field(buses_field)
+				if not buses:
+					continue
+				b0 = buses[0].split('.')[0]
+				b1 = buses[1].split('.')[0] if len(buses) > 1 else None
+				# If both ends in N (or one is start_node), mark transformer.
+				if ((b0 in N or b0 == start_node) and (b1 in N)) or ((b1 in N or b1 == start_node) and (b0 in N)):
+					# obj.get('object') expected like 'transformer.NAME'
+					obj_name = obj.get('object')
+					if obj_name and '.' in obj_name:
+						transformers.add(obj_name.split('.')[1])
+					else:
+						# Fallback to 'name' field
+						if obj.get('name'):
+							transformers.add(obj.get('name'))
+		# Union node names and transformers.
+		all_mg_elements[key] = N.union(transformers)				
 	return all_mg_elements
 
 def precompute_mg_element_mapping(dssPath, microgrids):
@@ -650,9 +754,13 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 	diesel_dict, natural_gas_dict, fossil_traces, batt_cycles, unreasonable_voltages, glc_traces = {}, {}, [], {}, {}, []
 	fossil_outage_kwh = 0
 	csv_outage_start, csv_outage_end = 24, 24 + outage_length # newQstsPlot() runs from 24 hours before to 24 hours after the outage.
-	gen_data = pd.read_csv(csvName)
+	try:
+		gen_data = pd.read_csv(csvName)
+	except Exception as e:
+		print(f'Failed to read CSV {csvName}: {e}')
+		return fossil_outage_kwh, diesel_dict, natural_gas_dict, fossil_traces, batt_cycles, glc_traces
 	# Loop through objects in circuit.
-	for monitor_name_phases in set(gen_data['Name']): # The 'Name' column in the csvs is usually something like 'monvsource-leadgen_634_air_control.1.2.3'. Break it up to clearly access parts at a time.
+	for monitor_name_phases in gen_data['Name'].unique(): # The 'Name' column in the csvs is usually something like 'monvsource-leadgen_634_air_control.1.2.3'. Break it up to clearly access parts at a time.
 		# Separate monitor label. 
 		monitor, name_phases = monitor_name_phases.split('-', 1) # E.g. monvsource, leadgen_634_air_control.1.2.3
 		# Separate phases.
@@ -661,12 +769,11 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 		generator_type = get_generator_type(monitor, name) # E.g. leadgen, 634_air_control. Returns None if object is not a generator. 
 		
 		# Set appropriate legend group based on microgrid.
+		legend_group = "Not_in_MG"
 		for key in microgrids:
 			if microgrids[key]['gen_bus'] in name or name in microgrids[key]["loads"] or name in microgrids[key]['gen_obs_existing']:
 				legend_group = key
 				break
-			else:
-				legend_group = "Not_in_MG"
 
 		# Loop through phases.
 		for y_name in y_list: 
@@ -682,40 +789,52 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 				this_series[y_name] = this_series[y_name].astype(float)
 				fossil_outage_phase_kwh = sum(abs(this_series[y_name].iloc[csv_outage_start:csv_outage_end])) # Fossil generation is typically negative. Vsource gen is positive.
 				fossil_outage_kwh += fossil_outage_phase_kwh
-				fossil_kw_rating = fossil_kw_ratings.get(legend_group).get(name) if generator_type == 'fossil' else vsource_kw_ratings.get(legend_group).get(name)
-				fossil_loading_average_decimal = fossil_outage_phase_kwh / (float(fossil_kw_rating) * outage_length)
-				if fossil_loading_average_decimal > 1:
-					print(f'Fossil loading average exceeds 100% ({fossil_loading_average_decimal * 100}).')
-					fossil_loading_average_decimal = 1 # TODO: Fossil loading average should never exceed 100%. Rounding fossil loading averages to 1 is only a short term fix.
-				elif 0 < fossil_loading_average_decimal < 0.25: 
-					print(f'Fossil loading average is lower than 25% ({fossil_loading_average_decimal * 100}).')
-					fossil_loading_average_decimal = 0.25 # TODO: Fossil loading average should not be below 25%. https://www.cat.com/en_US/by-industry/electric-power/Articles/White-papers/the-impact-of-generator-set-underloading.html
-				# Calculate diesel_consumption_per_hour and natural_gas_consumption_mmbtu_per_hour using interpolation. 
-				generator_size = float(fossil_kw_rating)
-				diesel_consumption_gal_per_hour = estimate_diesel_consumption(generator_size, fossil_loading_average_decimal) if fossil_loading_average_decimal != 0 else 0
-				diesel_consumption_outage_gal = diesel_consumption_gal_per_hour * outage_length
-				natural_gas_consumption_mmbtu_per_hour = estimate_natural_gas_consumption(generator_size, fossil_loading_average_decimal) if fossil_loading_average_decimal != 0 else 0
-				natural_gas_consumption_outage_mmbtu = natural_gas_consumption_mmbtu_per_hour * outage_length
-				if legend_group in diesel_dict.keys():
-					diesel_dict[legend_group] += diesel_consumption_outage_gal
+				if generator_type == 'fossil':
+					mg_fossil_dict = fossil_kw_ratings.get(legend_group, {})
+					fossil_kw_rating = mg_fossil_dict.get(name)
 				else:
-					diesel_dict[legend_group] = diesel_consumption_outage_gal
-				if legend_group in natural_gas_dict.keys():
-					natural_gas_dict[legend_group] += natural_gas_consumption_outage_mmbtu
+					mg_vsource_dict = vsource_kw_ratings.get(legend_group, {})
+					fossil_kw_rating = mg_vsource_dict.get(name)
+				if fossil_kw_rating is None:
+					print(f'Warning: missing kw rating for generator "{name}" in legend_group "{legend_group}". Skipping fuel calculations for this generator.')
 				else:
-					natural_gas_dict[legend_group] = natural_gas_consumption_outage_mmbtu
-				# Make fossil loading percentages traces.
-				fossil_percent_loading = [(x / float(fossil_kw_rating)) * -100 for x in this_series[y_name]] if generator_type == 'fossil' else [(x / float(fossil_kw_rating)) * 100 for x in this_series[y_name]]
-				graph_start_time = pd.Timestamp(f"{year}-01-01") + pd.Timedelta(hours=outage_start-24)
-				fossil_trace = graph_objects.Scatter(
-					x = pd.to_datetime(range(outage_length+48), unit = 'h', origin = graph_start_time),
-					y = fossil_percent_loading,
-					legendgroup=legend_group,
-					legendgrouptitle_text=legend_group,
-					showlegend=True,
-					name=monitor_name_phases + '_' + y_name,
-					hoverlabel = dict(namelength = -1))
-				fossil_traces.append(fossil_trace)
+					try:
+						fossil_kw_rating = float(fossil_kw_rating)
+						if fossil_kw_rating == 0:
+							print(f'Warning: zero kw rating for generator "{name}" in legend_group "{legend_group}". Skipping fuel calculations.')
+						else:
+							fossil_loading_average_decimal = fossil_outage_phase_kwh / (fossil_kw_rating * outage_length)
+							if fossil_loading_average_decimal > 1:
+								print(f'Fossil loading average exceeds 100% ({fossil_loading_average_decimal * 100}).')
+								fossil_loading_average_decimal = 1 # TODO: Fossil loading average should never exceed 100%. Rounding fossil loading averages to 1 is only a short term fix.
+							elif 0 < fossil_loading_average_decimal < 0.25:
+								print(f'Fossil loading average is lower than 25% ({fossil_loading_average_decimal * 100}).')
+								fossil_loading_average_decimal = 0.25 # TODO: Fossil loading average should not be below 25%. https://www.cat.com/en_US/by-industry/electric-power/Articles/White-papers/the-impact-of-generator-set-underloading.html
+							# Calculate diesel_consumption_per_hour and natural_gas_consumption_mmbtu_per_hour using interpolation.
+							generator_size = fossil_kw_rating
+							diesel_consumption_gal_per_hour = estimate_diesel_consumption(generator_size, fossil_loading_average_decimal) if fossil_loading_average_decimal != 0 else 0
+							diesel_consumption_outage_gal = diesel_consumption_gal_per_hour * outage_length
+							natural_gas_consumption_mmbtu_per_hour = estimate_natural_gas_consumption(generator_size, fossil_loading_average_decimal) if fossil_loading_average_decimal != 0 else 0
+							natural_gas_consumption_outage_mmbtu = natural_gas_consumption_mmbtu_per_hour * outage_length
+							diesel_dict[legend_group] = diesel_dict.get(legend_group, 0) + diesel_consumption_outage_gal
+							natural_gas_dict[legend_group] = natural_gas_dict.get(legend_group, 0) + natural_gas_consumption_outage_mmbtu
+							# Make fossil loading percentages traces.
+							if generator_type == 'fossil':
+								fossil_percent_loading = [(x / fossil_kw_rating) * -100 for x in this_series[y_name]]
+							else:
+								fossil_percent_loading = [(x / fossil_kw_rating) * 100 for x in this_series[y_name]]
+							graph_start_time = pd.Timestamp(f"{year}-01-01") + pd.Timedelta(hours=outage_start-24)
+							fossil_trace = graph_objects.Scatter(
+								x = pd.to_datetime(range(outage_length+48), unit = 'h', origin = graph_start_time),
+								y = fossil_percent_loading,
+								legendgroup=legend_group,
+								legendgrouptitle_text=legend_group,
+								showlegend=True,
+								name=monitor_name_phases + '_' + y_name,
+								hoverlabel = dict(namelength = -1))
+							fossil_traces.append(fossil_trace)
+					except ValueError:
+						print(f'Warning: invalid kw rating "{fossil_kw_rating}" for generator "{name}" in legend_group "{legend_group}". Skipping fuel calculations.')
 
 			# If battery_ and not null values, count battery cycles.
 			if (monitor == 'mongenerator' and generator_type == 'battery') and not this_series[y_name].isnull().values.any():
@@ -726,9 +845,20 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 					batt_kwh_input_output = sum([abs(x) for x in all_batt_loadshapes])
 				else:
 					batt_kwh_input_output = sum(abs(this_series[y_name]))
-				batt_kwh_rating = batt_kwh_ratings.get(legend_group).get(name_phases)
-				cycles = batt_kwh_input_output / (2 * float(batt_kwh_rating)) 
-				batt_cycles[f"{monitor_name_phases}_{y_name}"] = cycles
+				mg_batt_dict = batt_kwh_ratings.get(legend_group, {})
+				batt_kwh_rating = mg_batt_dict.get(name_phases)
+				if batt_kwh_rating is None:
+					print(f'Warning: missing batt kWh rating for "{name_phases}" in legend_group "{legend_group}". Skipping cycle calc.')
+				else:
+					try:
+						batt_kwh_rating = float(batt_kwh_rating)
+						if batt_kwh_rating == 0:
+							print(f'Warning: zero batt kWh rating for "{name_phases}" in legend_group "{legend_group}". Skipping cycle calc.')
+						else:
+							cycles = batt_kwh_input_output / (2 * batt_kwh_rating)
+							batt_cycles[f"{monitor_name_phases}_{y_name}"] = cycles
+					except ValueError:
+						print(f'Warning: invalid batt kWh rating "{batt_kwh_rating}" for "{name_phases}" in legend_group "{legend_group}". Skipping cycle calc.')
 
 			# Flag loads that don't fall within ansi bands.
 			if "_load" in csvName:

@@ -4,6 +4,7 @@ import networkx as nx
 from pprint import pprint as pp
 from collections import defaultdict, deque
 import microgridup
+from microgridup_control import _parse_bus_field
 
 # Auto gen some microgrid descriptions.
 # See experiments with networkx here: https://colab.research.google.com/drive/1RZyD6pRIdRAT-V2sBB0nPKVIvZP_RGHw
@@ -492,10 +493,33 @@ def nx_out_edges(G, sub_nodes):
 def get_edge_name(fr, to, omd_list):
 	'''Get an edge name using (fr,to) in the omd_list. Helper to form_microgrids().'''
 	edges = [ob.get('name') for ob in omd_list if ob.get('from') == fr and ob.get('to') == to]
-	if len(edges) == 0:
-		raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. No valid switch found between {fr} and {to}. Please change partitioning parameter(s).')
-	else:
+	if len(edges) > 0:
 		return edges[0]
+	# If no explicit edge between fr->to (common when loads/gens live on bus), try to find a line (or transformer) that feeds the bus 'fr' (i.e., line with to == fr).
+	feeders = [ob.get('name') for ob in omd_list if ob.get('object','').startswith('line') and ob.get('to') == fr]
+	if len(feeders) > 0:
+		# If more than one feeder found, prefer the first.
+		return feeders[0]
+	# Try transformers feeding the bus.
+	transformers = []
+	for ob in omd_list:
+		if 'transformer' in ob.get('object',''):
+			buses_field = ob.get('buses') or ob.get('bus') or ob.get('bus2')
+			if buses_field:
+				# Handle different formats: '[bus1,bus2]' or 'bus1,bus2' or list.
+				buses_str = buses_field if isinstance(buses_field, str) else ','.join(buses_field)
+				parts = _parse_bus_field(buses_field)
+				if len(parts) >= 2:
+					buses_str = parts[1]
+				elif len(parts) == 1:
+					buses_str = parts[0]
+				# Naive contains check; more parsing could be added if needed.
+				if fr in buses_str:
+					transformers.append(ob.get('name') or ob.get('object').split('.')[1])
+	if len(transformers) > 0:
+		return transformers[0]
+	# If still not found, raise error.
+	raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. No valid switch found between {fr} and {to}. Please change partitioning parameter(s).')
 
 def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_name_dict=None):
 	'''
@@ -511,10 +535,41 @@ def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_n
 	for idx in range(len(all_mgs)):
 		M_ID, MG_GROUP, TREE_ROOT, BORDERS = all_mgs[idx]
 		mg_name = mg_name_dict[f'mg{M_ID}'] if mg_name_dict and mg_name_dict[f'mg{M_ID}'] else f'mg{M_ID}'
-		this_switch = switch_dict[f'mg{M_ID}'] if switch_dict and switch_dict[f'mg{M_ID}'] != [''] else [get_edge_name(swedge[0], swedge[1], omd_list) for swedge in BORDERS]
-		if this_switch and type(this_switch) == list:
-			this_switch = this_switch[-1] if this_switch[-1] else this_switch[0] # TODO: Why is this_switch a list? Which value do we use? 
-		this_gen_bus = gen_bus_dict[f'mg{M_ID}'] if gen_bus_dict and gen_bus_dict[f'mg{M_ID}'] != '' else TREE_ROOT
+		# Determine the switch(s) for borders, but be tolerant if get_edge_name raises
+		if switch_dict and switch_dict.get(f'mg{M_ID}') not in (None, ['']):
+			this_switch = switch_dict[f'mg{M_ID}']
+		else:
+			this_switch = []
+			for swedge in BORDERS:
+				try:
+					this_switch.append(get_edge_name(swedge[0], swedge[1], omd_list))
+				except SwitchNotFoundError as e:
+					print(f'Error: {e}')
+		# Normalize switch if it's a list.
+		if this_switch and isinstance(this_switch, list):
+			this_switch = this_switch[-1] if this_switch[-1] else this_switch[0]
+		# Determine gen_bus: allow explicit gen_bus_dict override first
+		if gen_bus_dict and gen_bus_dict.get(f'mg{M_ID}') not in (None, ''):
+			this_gen_bus = gen_bus_dict[f'mg{M_ID}']
+		else:
+			# Infer gen bus for all objects in MG_GROUP by looking at their 'parent' fields in omd_list. Gen bus = parent of first object in MG_GROUP to have a parent. Note that buses do not have parents.
+			parent_buses = set()
+			for name in MG_GROUP:
+				# Find matching object in omd_list.
+				for ob in omd_list:
+					if ob.get('name') == name:
+						# loads/generators/storage often have 'parent' or 'bus1'
+						parent = ob.get('parent') or ob.get('bus') or ob.get('bus1') or ob.get('parent_bus')
+						if parent:
+							# Strip phase suffix if present (e.g., 'reg0_end.1' -> 'reg0_end')
+							parent_buses.add(str(parent).split('.')[0])
+						break
+			# If exactly one parent bus and it's not empty, prefer that as gen_bus.
+			if len(parent_buses) == 1:
+				this_gen_bus = list(parent_buses)[0]
+			else:
+				# Fallback to TREE_ROOT (sometimes problematic).
+				this_gen_bus = TREE_ROOT
 		# MICROGRIDS[f'mg{M_ID}'] = {
 		MICROGRIDS[mg_name] = {
 			'loads': [ob.get('name') for ob in omd_list if ob.get('name') in MG_GROUP and ob.get('object') == 'load'],
@@ -540,7 +595,10 @@ def _tests():
 			params = algo_params.copy()
 			del params['gen_obs_existing']
 		elif partitioning_method == 'manual':
-			params = algo_params
+			params = algo_params.copy()
+			if 'wizard' in _dir:
+				del params['gen_bus']
+				del params['switch']
 		else:
 			params = {}
 		try:
