@@ -595,7 +595,10 @@ def _tests():
 			params = algo_params.copy()
 			del params['gen_obs_existing']
 		elif partitioning_method == 'manual':
-			params = algo_params
+			params = algo_params.copy()
+			if 'wizard' in _dir:
+				del params['gen_bus']
+				del params['switch']
 		else:
 			params = {}
 		try:

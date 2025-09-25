@@ -826,7 +826,7 @@
                         "634c_atc_tower"
                     ],
                     "switch": "632633",
-                    "gen_bus": "633",
+                    "gen_bus": "634",
                     "gen_obs_existing": [
                         "solar_634_existing",
                         "battery_634_existing"
@@ -883,7 +883,7 @@
                         "634c_atc_tower"
                     ],
                     "switch": "632633",
-                    "gen_bus": "633",
+                    "gen_bus": "634",
                     "gen_obs_existing": [
                         "solar_634_existing",
                         "battery_634_existing"
@@ -965,7 +965,7 @@
                         "634c_atc_tower"
                     ],
                     "switch": "632633",
-                    "gen_bus": "633",
+                    "gen_bus": "634",
                     "gen_obs_existing": [],
                     "parameter_overrides": {
                         "reopt_inputs": {}
