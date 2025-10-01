@@ -133,7 +133,7 @@ def create_economic_microgrid(data, logger, invalidate_cache):
 		with open('reopt_mgEconomic/allInputData.json', 'w') as f:
 			json.dump(allInputData, f, indent=4)
 		__neoMetaModel__.runForeground('reopt_mgEconomic')
-		_microgrid_design_output('reopt_mgEconomic')
+		_microgrid_design_output('reopt_mgEconomic', logger)
 
 
 def is_not_timeseries_column(series):
@@ -201,7 +201,7 @@ def _run(data, mg_name, logger, invalidate_cache):
 	# - Run REopt
 	omf.models.__neoMetaModel__.runForeground(reopt_dirname)
 	# - Write output
-	_microgrid_design_output(reopt_dirname)
+	_microgrid_design_output(reopt_dirname, logger)
 
 
 def _set_allinputdata_load_shape_parameters(data, mg_name, reopt_dirname, logger):
@@ -465,7 +465,7 @@ def _set_allinputdata_generator_parameters(reopt_dirname, fossil_kw_existing):
 		json.dump(allInputData, f, indent=4)
 
 
-def _microgrid_design_output(reopt_dirname):
+def _microgrid_design_output(reopt_dirname, logger):
 	''' Generate a clean microgridDesign output with edge-to-edge design. '''
 	assert isinstance(reopt_dirname, str)
 	all_html = ''
@@ -478,10 +478,12 @@ def _microgrid_design_output(reopt_dirname):
 			with open(f'{reopt_dirname}/cleanMicrogridDesign.html', 'w') as outFile:
 				outFile.write(f"<html><body><h1>{warning}</h1><p>Check REopt logs for details.</p></body></html>")
 		except Exception as e:
-			# If making dir or writing file fails, at least log to stdout
+			# If making dir or writing file fails, log message
 			print(f'Unable to create placeholder for missing {reopt_dirname}: {e}')
+			logger.warning(f'Unable to create placeholder for missing {reopt_dirname}: {e}')
 		# Log and return early so pipeline continues
 		print(warning)
+		logger.warning(warning)
 		return
 	# Try to read allOutputData.json, if missing fall back to empty dict
 	try:
@@ -490,6 +492,7 @@ def _microgrid_design_output(reopt_dirname):
 	except FileNotFoundError:
 		logger_msg = f'{reopt_dirname}/allOutputData.json not found. Continuing with limited output.'
 		print(logger_msg)
+		logger.warning(logger_msg)
 		allOutData = {}
 	# Make timeseries charts
 	plotlyData = {
@@ -511,6 +514,7 @@ def _microgrid_design_output(reopt_dirname):
 		# Skip charts when data isn't present.
 		if v not in allOutData:
 			print(f'Skipping chart "{k}" because "{v}" not present in {reopt_dirname}/allOutputData.json')
+			logger.warning(f'Skipping chart "{k}" because "{v}" not present in {reopt_dirname}/allOutputData.json')
 			continue
 		try:
 			chart_data = json.loads(allOutData[v])
@@ -557,6 +561,7 @@ def _microgrid_design_output(reopt_dirname):
 			all_html = all_html + fig_html
 		except Exception as e:
 			print(f'Failed to generate chart {k} from {reopt_dirname}: {e}')
+			logger.warning(f'Failed to generate chart {k} from {reopt_dirname}: {e}')
 			continue
 	# Make generation overview chart, guarding file openings and missing keys.
 	try:
@@ -564,12 +569,14 @@ def _microgrid_design_output(reopt_dirname):
 			all_input_data = json.load(f)
 	except FileNotFoundError:
 		print(f'{reopt_dirname}/allInputData.json not found. Using defaults.')
+		logger.warning(f'{reopt_dirname}/allInputData.json not found. Using defaults.')
 		all_input_data = {}
 	try:
 		with open(f'{reopt_dirname}/results.json') as f:
 			results = json.load(f)
 	except FileNotFoundError:
 		print(f'{reopt_dirname}/results.json not found. Using defaults.')
+		logger.warning(f'{reopt_dirname}/results.json not found. Using defaults.')
 		results = {}
 	# Safe getter with defaults in the event of missing data.
 	def safe_float(d, k, default=0.0):
@@ -814,8 +821,9 @@ def _tests():
 	with open('allInputData.json') as file:
 		data = microgridup.get_immutable_dict(json.load(file))
 	mg_name = 'mg0'
-	print(f'----------microgrid_design.py testing {test_model}----------')
 	logger = microgridup.setup_logging('logs.log', mg_name)
+	print(f'----------microgrid_design.py testing {test_model}----------')
+	logger.warning(f'----------microgrid_design.py testing {test_model}----------')
 	_run(data, mg_name, logger, False)
 	# - Assert that we got valid output from REopt
 	with open(f'reopt_{mg_name}/REoptInputs.json') as f:
