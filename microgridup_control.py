@@ -93,7 +93,7 @@ def _parse_bus_field(bus_field):
 	# Single entry maybe with phases: split on '.' and return head.
 	return [b.split('.')[0]]
 
-def get_first_nodes_of_mgs(dssTree, microgrids):
+def get_first_nodes_of_mgs(dssTree, microgrids, logger=None):
 	'''
 	Find the "first node" (bus) for each microgrid based on the switch.
 	Returns dict mapping microgrid key -> bus name (string).
@@ -108,7 +108,10 @@ def get_first_nodes_of_mgs(dssTree, microgrids):
 		if switch is None:
 			# Fallback to empty string and notify user.
 			switch = ''
-			print(f'Error: switch for microgrid {key} could not be found. Fallback to empty string.')
+			if logger:
+				logger.warning(f'Error: switch for microgrid {key} could not be found. Fallback to empty string.')
+			else:
+				print(f'Error: switch for microgrid {key} could not be found. Fallback to empty string.')
 		found = None
 		# Look for line objects that reference this switch (object names can be 'line', 'line.<name>', or similar).
 		for obj in dssTree:
@@ -145,11 +148,14 @@ def get_first_nodes_of_mgs(dssTree, microgrids):
 		# Fallback: use gen_bus if available (useful for manual mg definitions)
 		if found is None:
 			found = microgrids[key].get('gen_bus') or ''
-			print(f'Error: no first node found for microgrid {key}. Defaulting to {found}.')
+			if logger:
+				logger.warning(f'Error: no first node found for microgrid {key}. Defaulting to {found}.')
+			else:
+				print(f'Error: no first node found for microgrid {key}. Defaulting to {found}.')
 		nodes[key] = found
 	return nodes
 
-def get_all_mg_elements(dssPath, microgrids, omdPath=None):
+def get_all_mg_elements(dssPath, microgrids, omdPath=None, logger=None):
 	'''
 	Compute all elements in each microgrid by starting from the 'first node' and collecting descendants. If the starting node is missing from the graph, fall back to using explicit microgrid load/gen lists.
 	'''
@@ -160,7 +166,7 @@ def get_all_mg_elements(dssPath, microgrids, omdPath=None):
 	else:
 		dssTree = dssConvert.dssToTree(dssPath)
 		G = dssConvert.dss_to_networkx(dssPath)
-	first_nodes = get_first_nodes_of_mgs(dssTree, microgrids)
+	first_nodes = get_first_nodes_of_mgs(dssTree, microgrids, logger)
 	all_mg_elements = {}
 	for key in first_nodes:
 		start_node = first_nodes[key]
@@ -172,7 +178,10 @@ def get_all_mg_elements(dssPath, microgrids, omdPath=None):
 			N.add(start_node)
 		else:
 			# Fallback: use explicit lists from microgrids (loads and gen_obs_existing and gen_bus).
-			print(f'Error finding first node {start_node} of microgrid {key} using NetworkX. Defaulting to microgrid definition.')
+			if logger:
+				logger.warning(f'Error finding first node {start_node} of microgrid {key} using NetworkX. Defaulting to microgrid definition.')
+			else:
+				print(f'Error finding first node {start_node} of microgrid {key} using NetworkX. Defaulting to microgrid definition.')
 			mg = microgrids.get(key, {})
 			loads = mg.get('loads', []) or []
 			gen_obs_existing = mg.get('gen_obs_existing', []) or []
@@ -206,12 +215,12 @@ def get_all_mg_elements(dssPath, microgrids, omdPath=None):
 		all_mg_elements[key] = N.union(transformers)				
 	return all_mg_elements
 
-def precompute_mg_element_mapping(dssPath, microgrids):
+def precompute_mg_element_mapping(dssPath, microgrids, logger):
 	'''
 	Precomputes a dictionary mapping each element to its microgrid ID.
     '''
 	# Get all elements for each microgrid.
-	all_mg_elements = get_all_mg_elements(dssPath, microgrids)
+	all_mg_elements = get_all_mg_elements(dssPath, microgrids, logger)
 	# Create a reverse mapping: element -> microgrid ID.
 	element_to_mg = {}
 	for mg_id, elements in all_mg_elements.items():
@@ -233,7 +242,7 @@ def convert_to_json(all_mg_elements):
 
 def plot_inrush_data(dssPath, microgrids, out_html, outage_start, outage_end, outage_length, logger, vsource_kw_ratings, motor_perc=0.5):
 	# Grab all elements by mg. 
-	all_mg_elements = get_all_mg_elements(dssPath, microgrids)
+	all_mg_elements = get_all_mg_elements(dssPath, microgrids, logger)
 	# print('JSON compatible representation of all_mg_elements (for jinja-ing into the circuit map):',convert_to_json(all_mg_elements))
 	# logger.warning(f'JSON compatible representation of all_mg_elements (for jinja-ing into the circuit map): {convert_to_json(all_mg_elements)}')
 	dssTree = dssConvert.dssToTree(dssPath)
@@ -556,7 +565,7 @@ def plot_manual_balance_approach(mg_key, year, outage_start, outage_end, outage_
 	offline.plot(fig, filename=out_name, auto_open=False)
 	return out_name
 
-def make_chart_from_csv(csvName, y_list, year, microgrids, chart_name, y_axis_name, outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, vsource_kw_ratings={}, rengen_kw_ratings={}, rengen_mgs={}):
+def make_chart_from_csv(csvName, y_list, year, microgrids, chart_name, y_axis_name, outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, logger, vsource_kw_ratings={}, rengen_kw_ratings={}, rengen_mgs={}):
 	'''
 	Plot the contents of a csv generated by newQstsPlot().
 
@@ -592,7 +601,7 @@ def make_chart_from_csv(csvName, y_list, year, microgrids, chart_name, y_axis_na
 	'''
 	rengen_proportional_loadshapes = form_rengen_proportional_loadshapes(rengen_mgs, rengen_kw_ratings, microgrids)
 	storage_proportional_loadshapes = form_storage_proportional_loadshapes(rengen_mgs, batt_kwh_ratings, microgrids) # Divide batteries into microgrids, find mg total kwh capacities for storage, and form element specific loadshapes.
-	fossil_outage_kwh, diesel_dict, natural_gas_dict, fossil_traces, batt_cycles, glc_traces = extract_charting_data(csvName, microgrids, y_list, outage_start, outage_length, fossil_kw_ratings, vsource_kw_ratings, year, rengen_mgs, storage_proportional_loadshapes, batt_kwh_ratings, rengen_proportional_loadshapes)
+	fossil_outage_kwh, diesel_dict, natural_gas_dict, fossil_traces, batt_cycles, glc_traces = extract_charting_data(csvName, microgrids, y_list, outage_start, outage_length, fossil_kw_ratings, vsource_kw_ratings, year, rengen_mgs, storage_proportional_loadshapes, batt_kwh_ratings, rengen_proportional_loadshapes, logger)
 	if chart_name == 'Generator Output':
 		make_fossil_loading_chart(csvName, fossil_traces, fossil_outage_kwh, diesel_dict, natural_gas_dict)
 		make_batt_cycle_chart(csvName, batt_cycles)
@@ -722,7 +731,7 @@ def get_generator_type(monitor, name):
 		generator_type = parts[0]
 	return generator_type
 
-def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_length, fossil_kw_ratings, vsource_kw_ratings, year, rengen_mgs, storage_proportional_loadshapes, batt_kwh_ratings, rengen_proportional_loadshapes):
+def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_length, fossil_kw_ratings, vsource_kw_ratings, year, rengen_mgs, storage_proportional_loadshapes, batt_kwh_ratings, rengen_proportional_loadshapes, logger):
 	'''
 	:param csvName: CSV name generated by newQstsPlot. Prefix is timezcontrol.
 	:type csvName: str
@@ -758,6 +767,7 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 		gen_data = pd.read_csv(csvName)
 	except Exception as e:
 		print(f'Failed to read CSV {csvName}: {e}')
+		logger.warning(f'Failed to read CSV {csvName}: {e}')
 		return fossil_outage_kwh, diesel_dict, natural_gas_dict, fossil_traces, batt_cycles, glc_traces
 	# Loop through objects in circuit.
 	for monitor_name_phases in gen_data['Name'].unique(): # The 'Name' column in the csvs is usually something like 'monvsource-leadgen_634_air_control.1.2.3'. Break it up to clearly access parts at a time.
@@ -1475,7 +1485,7 @@ def play(data, outage_start, outage_length, logger):
 	# Write the adjusted opendss file with new kw, generators.
 	dssConvert.treeToDss(new_dss_tree, 'circuit_control.dss')
 	# Precompute element to mg mapping to be used for speedy lookup later.
-	element_to_mg = precompute_mg_element_mapping('circuit_control.dss', microgrids)
+	element_to_mg = precompute_mg_element_mapping('circuit_control.dss', microgrids, logger)
 	# Run the simulation.  can hang, so wait at most 4 minutes for it to complete
 	FPREFIX = 'timezcontrol'
 	newQstsPlot(
@@ -1522,11 +1532,11 @@ def play(data, outage_start, outage_length, logger):
 			rengen_kw_ratings[mg][item.get("object").split(".")[1]] = item.get("kw")
 	# Generate the output charts.
 	if os.path.exists(f'{FPREFIX}_source_and_gen.csv'):
-		diesel_dict, natural_gas_dict = make_chart_from_csv(f'{FPREFIX}_source_and_gen.csv', ['P1(kW)','P2(kW)','P3(kW)'], 2019, microgrids, "Generator Output", "Average Hourly kW", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, vsource_kw_ratings=vsource_kw_ratings, rengen_kw_ratings=rengen_kw_ratings, rengen_mgs=rengen_mgs)
+		diesel_dict, natural_gas_dict = make_chart_from_csv(f'{FPREFIX}_source_and_gen.csv', ['P1(kW)','P2(kW)','P3(kW)'], 2019, microgrids, "Generator Output", "Average Hourly kW", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, logger, vsource_kw_ratings=vsource_kw_ratings, rengen_kw_ratings=rengen_kw_ratings, rengen_mgs=rengen_mgs)
 	if os.path.exists(f'{FPREFIX}_load.csv'):
-		make_chart_from_csv(f'{FPREFIX}_load.csv', ['V1(PU)','V2(PU)','V3(PU)'], 2019, microgrids, "Load Voltage", "PU", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, rengen_kw_ratings=rengen_kw_ratings, rengen_mgs=rengen_mgs)
+		make_chart_from_csv(f'{FPREFIX}_load.csv', ['V1(PU)','V2(PU)','V3(PU)'], 2019, microgrids, "Load Voltage", "PU", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, logger, rengen_kw_ratings=rengen_kw_ratings, rengen_mgs=rengen_mgs)
 	if os.path.exists(f'{absolute_model_directory}/{FPREFIX}_control.csv'):
-		make_chart_from_csv(f'{FPREFIX}_control.csv', ['Tap(pu)'], 2019, microgrids, "Tap Position", "PU", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings)
+		make_chart_from_csv(f'{FPREFIX}_control.csv', ['Tap(pu)'], 2019, microgrids, "Tap Position", "PU", outage_start, outage_length, batt_kwh_ratings, fossil_kw_ratings, logger)
 	plot_inrush_data(path_to_dss, microgrids, f'{FPREFIX}_inrush_plot.html', outage_start, outage_end, outage_length, logger, vsource_kw_ratings=vsource_kw_ratings)
 	# Make land use chart.
 	make_land_use_chart(microgrids, f'{FPREFIX}_land_use_chart.html', fossil_kw_ratings, vsource_kw_ratings, rengen_kw_ratings, 
@@ -1591,8 +1601,9 @@ def _tests():
 		allInputData = json.load(file)
 	outage_start = int(allInputData['outage_start_hour'])
 	outage_length = int(allInputData['outageDuration'])
-	print(f'----------microgridup_control.py testing {test_model}----------')
 	logger = microgridup.setup_logging('logs.log')
+	print(f'----------microgridup_control.py testing {test_model}----------')
+	logger.warning(f'----------microgridup_control.py testing {test_model}----------')
 	play(immutable_data, outage_start, outage_length, logger)
 	os.chdir(curr_dir)
 	return print('Ran all tests for microgridup_control.py.')
