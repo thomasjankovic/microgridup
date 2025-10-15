@@ -229,6 +229,23 @@ def _set_allinputdata_load_shape_parameters(data, mg_name, reopt_dirname, logger
 	assert isinstance(reopt_dirname, str)
 	assert isinstance(logger, logging.Logger)
 	load_df = pd.read_csv('loads.csv')
+	# Normalize columns (case-insensitive matching)
+	load_columns_lower = [str(c).lower() for c in load_df.columns]
+	# Validate that the loads required by this microgrid exist in the CSV.
+	expected_loads = [str(x).lower() for x in data['MICROGRIDS'][mg_name].get('loads', []) if x]
+	missing = [l for l in expected_loads if l not in load_columns_lower]
+	if missing:
+		# Map back to original-case expected names for more descriptive message if possible.
+		original_expected = data['MICROGRIDS'][mg_name].get('loads', [])
+		missing_original_case = [orig for orig in original_expected if str(orig).lower() in missing]
+		msg = (f'Loads CSV is missing required columns for microgrid "{mg_name}". '
+		 f'Missing load columns: {missing_original_case}. '
+		 'The loads.csv header must contain load names that match the circuit (case-insensitive). '
+		 'Please upload a loads.csv that corresponds to the selected circuit.')
+		# Log and raise an explicit error so test/backend callers see a clear exception
+		print(msg)
+		logger.warning(msg)
+		raise ValueError(msg)
 	# - Remove any columns that contain hourly indicies instead of kW values
 	load_df = load_df.iloc[:, load_df.apply(is_not_timeseries_column).to_list()]
 	# - Write loadShape.csv
@@ -241,14 +258,15 @@ def _set_allinputdata_load_shape_parameters(data, mg_name, reopt_dirname, logger
 	with open(reopt_dirname + '/loadShape.csv') as f:
 		allInputData['loadShape'] = f.read()
 	# - Write criticalLoadshape.csv
+	# Convert dataframe column names to lowercase for consistent lookup
+	load_df.columns = [str(x).lower() for x in load_df.columns]
 	column_selection = []
 	for load_name in data['MICROGRIDS'][mg_name]['loads']:
 		if load_name in data['CRITICAL_LOADS']:
-			column_selection.append(load_name)
+			column_selection.append(load_name.lower())
 	# - /jsonToDss writes load names as they are to the DSS file, which is fine since OpenDSS is case-insensitive. However, our microgrid generation
 	#   code always outputs microgrid load names in lowercase, so I have to convert the DataFrame column names to lowercase if I want to access data
 	#   in the microgrid object without crashing due to a key error
-	load_df.columns = [str(x).lower() for x in load_df.columns]
 	critical_load_shape_series = load_df[column_selection].apply(sum, axis=1)
 	critical_load_shape_series.to_csv(reopt_dirname + '/criticalLoadShape.csv', header=False, index=False)
 	with open(reopt_dirname + '/criticalLoadShape.csv') as f:

@@ -98,6 +98,8 @@ def main(data, invalidate_cache=True, open_results=False):
 		json.dump(inputs, inputs_file, indent=4)
 	# - Now that the data object has been set up, we shouldn't need to change it anymore, so create an immutable copy to pass around
 	immutable_data = get_immutable_dict(data)
+	# Validate microgrids - fail fast if any microgrid lacks loads
+	_validate_microgrids_have_loads(immutable_data)
 	# Setup logging.
 	log_file = f'{absolute_model_directory}/logs.log'
 	if os.path.exists(log_file):
@@ -242,6 +244,21 @@ def main(data, invalidate_cache=True, open_results=False):
 	finally:
 		os.chdir(curr_dir)
 		os.system(f'rm "{absolute_model_directory}/0running.txt"')
+
+
+def _validate_microgrids_have_loads(data):
+    '''Raise ValueError if any microgrid is missing loads. Assumption: every microgrid must include at least one load.'''
+    missing = []
+    for mg_name, mg in data.get('MICROGRIDS', {}).items():
+        loads = mg.get('loads') if isinstance(mg, dict) else getattr(mg, 'get', lambda *_: ())('loads', ())
+        # Treat empty tuple/list or None as missing.
+        if not loads:
+            missing.append(mg_name)
+    if missing:
+        raise ValueError(
+            f'The following microgrids have no loads assigned: {missing}. '
+            'At least one load must be placed in each microgrid.'
+        )
 
 
 def setup_logging(log_file, mg_name=None):
