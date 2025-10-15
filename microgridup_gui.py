@@ -508,10 +508,6 @@ def previewPartitions():
 	except Exception:
 		return jsonify('Invalid partitioning method')
 	MICROGRIDS = form_microgrids(G, MG_GROUPS, omd)
-	for mg in MICROGRIDS:
-		if not MICROGRIDS[mg]['switch']:
-			print(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
-			raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
 	# Embed the map. 
 	microgrids_as_mapping_proxy_type = microgridup.get_immutable_dict(MICROGRIDS)
 	critical_loads_as_tuple = tuple(CRITICAL_LOADS)

@@ -393,136 +393,198 @@ def count_interruptions_rengenmg(outage_start, outage_end, outage_length, all_lo
 		pass
 	return interruptions
 
+def _parse_mult_field(dss_tree, mult_name):
+    '''
+    Return a numpy 1-D float array parsed from an entry in dss_tree whose object contains mult_name.
+    Returns None if not found or parse fails.
+    '''
+    for ob in dss_tree:
+        if ob.get('object') and mult_name in ob.get('object'):
+            mult = ob.get('mult')
+            if mult is None:
+                return None
+            # If it's already a list or array
+            if isinstance(mult, (list, tuple)):
+                try:
+                    return np.array([float(x) for x in mult], dtype=float)
+                except Exception:
+                    return None
+            # Otherwise expect a string like '[1,2,3]' or '1,2,3'
+            s = str(mult).strip()
+            if s.startswith('[') and s.endswith(']'):
+                s = s[1:-1]
+            if s == '':
+                return np.array([], dtype=float)
+            try:
+                return np.array([float(x) for x in s.split(',')], dtype=float)
+            except Exception:
+                return None
+    return None
+
 def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, logger):
-	# Manually constructs battery loadshapes for outage and reinserts into tree based on a proportional to kWh basis. 
-	gen_bus = mg_values['gen_bus']
-	# Do vector subtraction to figure out battery loadshapes. 
-	# First get all loads.
-	all_mg_loads = [
-		ob for ob in dssTree
-		if ob.get("object","x.x").split('.')[1] in mg_values["loads"]
-		and "load." in ob.get("object")
-	]
-	if len(all_mg_loads) > 0: # i.e. if we have loads
-		load_loadshapes = []
-		for load_idx in range(len(all_mg_loads)):
-			# Get loadshapes of all renewable generation.
-			load_loadshape_name = all_mg_loads[load_idx].get('yearly')
-			load_loadshape = [ob.get("mult") for ob in dssTree if ob.get("object") and load_loadshape_name in ob.get("object")]
-			list_load_loadshape = [float(shape) for shape in load_loadshape[0][1:-1].split(",")]
-			load_loadshapes.append(list_load_loadshape)
-		data = np.array(load_loadshapes)
-		all_loads_shapes_kw = np.sum(data, axis=0)
-	else:
-		print("Error: No loads.")
-		logger.warning("Error: No loads.")
-		return dssTree, None, None, None, None, None
-
-	# Second, get all renewable generation.
-	all_mg_rengen = [
-		ob for ob in dssTree
-		if ob.get('bus1','x.x').split('.')[0] == gen_bus
-		and ('generator.solar' in ob.get('object') or 'generator.wind' in ob.get('object'))
-	]
-	if len(all_mg_rengen) > 0: # i.e. if we have rengen
-		rengen_loadshapes = []
-		for gen_idx in range(len(all_mg_rengen)):
-			try:
-				# Get loadshapes of all renewable generation.
-				rengen_loadshape_name = all_mg_rengen[gen_idx].get('yearly')
-				rengen_loadshape = [ob.get("mult") for ob in dssTree if ob.get("object") and rengen_loadshape_name in ob.get("object")]
-				list_rengen_loadshape = [float(shape) for shape in rengen_loadshape[0][1:-1].split(",")]
-				rengen_loadshapes.append(list_rengen_loadshape)
-			except:
-				pass#TODO: fix the above to be general. try/except here is a hack to get Picatinny to run.
-		data = np.array(rengen_loadshapes)
-		all_rengen_shapes = np.sum(data,0)
-	else:
-		all_rengen_shapes = np.zeros(len(all_loads_shapes_kw)) # 8760.
-	
-	# Third, get battery sizes.
-	batt_obj = [
-		ob for ob in dssTree
-		if ob.get('bus1','x.x').split('.')[0] == gen_bus
-		and 'storage' in ob.get('object')
-	]
-	# If there are multiple batteries at one bus, combine their kW ratings and kWh capacities. 
-	batt_kws, batt_kwhs = [], []
-	batt_obj.sort(key=lambda x:float(x.get('kwhrated')))
-	# Create lists of all ratings and capacities and their sums. 
-	for ob in batt_obj:
-		batt_kws.append(float(ob.get("kwrated")))
-		batt_kwhs.append(float(ob.get("kwhrated")))
-	batt_kw = sum(batt_kws)
-	batt_kwh = sum(batt_kwhs)
-
-	# Subtract renewable generation vector from load vector.
-	new_batt_loadshape = all_loads_shapes_kw - all_rengen_shapes # NOTE: <-- load – rengen. 3 cases: above 0, 0, less than 0
-
-	# Slice to outage length.
-	new_batt_loadshape_sliced = new_batt_loadshape[outage_start:outage_end]
-
-	cumulative_existing_batt_shapes = pd.Series(dtype='float64')
-	try:
-		# Option 1: Find battery's starting capacity based on charge and discharge history by the start of the outage.
-		# cumulative_existing_batt_shapes = pd.Series(dtype='float64')
-		# Get existing battery's(ies') loadshapes. 
-		for obj in batt_obj:
-			batt_loadshape_name = obj.get("yearly")
-			full_loadshape = [ob.get("mult") for ob in dssTree if ob.get("object") and batt_loadshape_name in ob.get("object")]
-			ds_full_loadshape = pd.Series([float(shape) for shape in full_loadshape[0][1:-1].split(",")])
-			cumulative_existing_batt_shapes = cumulative_existing_batt_shapes.add(ds_full_loadshape, fill_value=0)
-		starting_capacity = batt_kwh + sum(cumulative_existing_batt_shapes[:outage_start])
-	except:
-		# Option 2: Set starting_capacity to the batt_kwh, assuming the battery starts the outage at full charge. 
-		starting_capacity = batt_kwh
-
-	# Currently unused variable for tracking unsupported load in kwh.
-	unsupported_load_kwh = 0
-
-	# Discharge battery (allowing for negatives that recharge (until hitting capacity)) until battery reaches 0 charge. Allow starting charge to be configurable. 
-	hour = 0
-	total_surplus = [] # Curtailed renewable generation (cannot fit in battery) during outage.
-	while hour < len(new_batt_loadshape_sliced):
-		surplus = 0 # Note: this variable stores how much rengen we need to curb per step. Create a cumulative sum to find overall total.
-		dischargeable = starting_capacity if starting_capacity < batt_kw else batt_kw
-		indicator = new_batt_loadshape_sliced[hour] - dischargeable 
-		# There is more rengen than load and we can charge our battery (up until reaching batt_kwh).
-		if new_batt_loadshape_sliced[hour] < 0:
-			starting_capacity += abs(new_batt_loadshape_sliced[hour])
-			if starting_capacity > batt_kwh:
-				surplus = starting_capacity - batt_kwh
-				starting_capacity = batt_kwh
-			new_batt_loadshape_sliced[hour] = starting_capacity - (starting_capacity + new_batt_loadshape_sliced[hour] + surplus)
-		# There is load left to cover and we can discharge the battery to cover it in its entirety. 
-		elif indicator < 0:
-			starting_capacity -= new_batt_loadshape_sliced[hour]
-			new_batt_loadshape_sliced[hour] *= -1 
-		# There is load left to cover after discharging as much battery as possible for the hour. Load isn't supported.
-		else:
-			new_batt_loadshape_sliced[hour] = -1 * dischargeable
-			starting_capacity -= dischargeable
-			unsupported_load_kwh += indicator
-		total_surplus.append(surplus)
-		hour += 1
-	# print(f"Total curtailed renewable generation during outage for {mg_key} = {sum(total_surplus)}.")
-
-	# Replace each outage portion of the existing battery loadshapes with a proportion of the new loadshape equal to the proportion of the battery's kwh capacity to the total kwh capacity on the bus.
-	new_dss_tree = dssTree.copy()
-	for idx in range(len(batt_kwhs)):
-		factor = batt_kwhs[idx] / batt_kwh
-		new_shape = list((new_batt_loadshape_sliced * factor)/batt_kws[idx])
-		# Get existing battery loadshape
-		batt_loadshape_name = batt_obj[idx].get("yearly")
-		full_loadshape = [ob.get("mult") for ob in dssTree if ob.get("object") and batt_loadshape_name in ob.get("object")]
-		list_full_loadshape = [float(shape) for shape in full_loadshape[0][1:-1].split(",")]
-		# Replace outage portion with outage loadshape.
-		final_batt_loadshape = list_full_loadshape[:outage_start] + new_shape + list_full_loadshape[outage_end:]
-		# Get index of battery in tree. 
-		batt_loadshape_idx = dssTree.index([ob for ob in dssTree if ob.get("object") and batt_loadshape_name in ob.get("object")][0])
-		# Replace mult with new loadshape and reinsert into tree.
-		new_dss_tree[batt_loadshape_idx]['mult'] = str(final_batt_loadshape).replace(" ","")
-	return new_dss_tree, new_batt_loadshape_sliced, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw
+    '''
+    Manually constructs battery loadshapes for outage and reinserts into tree based on a proportional to kWh basis.
+    Returns: (new_dss_tree, new_batt_loadshape_sliced, cumulative_existing_batt_shapes,
+              all_rengen_shapes, total_surplus, all_loads_shapes_kw)
+    '''
+    gen_bus = mg_values.get('gen_bus')
+    if not gen_bus:
+        msg = f"Manual balance: missing gen_bus in microgrid values: {mg_values}"
+        logger.warning(msg)
+        raise ValueError(msg)
+    # First: collect loads and their yearly shapes
+    all_mg_loads = [
+        ob for ob in dssTree
+        if ob.get('object') and ob.get('object').startswith('load.')
+        and ob.get('object').split('.')[1] in mg_values.get('loads', [])
+    ]
+    if len(all_mg_loads) == 0:
+        msg = f'No loads found for microgrid with gen_bus "{gen_bus}". Manual balance cannot proceed.'
+        logger.warning(msg)
+        raise ValueError(msg)
+    load_shapes = []
+    for load_ob in all_mg_loads:
+        load_shape_name = load_ob.get('yearly')
+        arr = _parse_mult_field(dssTree, load_shape_name) if load_shape_name else None
+        if arr is None:
+            msg = f"Could not parse load yearly shape for load {load_ob.get('object')}"
+            logger.warning(msg)
+            raise ValueError(msg)
+        load_shapes.append(arr)
+    # Ensure consistent length
+    lengths = {len(a) for a in load_shapes}
+    if len(lengths) != 1:
+        msg = f'Inconsistent loadshape lengths for microgrid {gen_bus}: lengths {lengths}'
+        logger.warning(msg)
+        raise ValueError(msg)
+    all_loads_shapes_kw = np.sum(np.vstack(load_shapes), axis=0)
+    # Second: renewable generation shapes at the gen_bus
+    rengen_list = [
+        ob for ob in dssTree
+        if ob.get('bus1', 'x.x').split('.')[0] == gen_bus
+        and (('generator.solar' in ob.get('object', '')) or ('generator.wind' in ob.get('object', '')))
+    ]
+    if rengen_list:
+        rengen_shapes = []
+        for g in rengen_list:
+            name = g.get('yearly')
+            arr = _parse_mult_field(dssTree, name) if name else None
+            if arr is None:
+                logger.warning(f"Missing/invalid yearly shape for rengen {g.get('object')} at {gen_bus}; treating as zeros.")
+                arr = np.zeros_like(all_loads_shapes_kw)
+            rengen_shapes.append(arr)
+        all_rengen_shapes = np.sum(np.vstack(rengen_shapes), axis=0)
+    else:
+        all_rengen_shapes = np.zeros_like(all_loads_shapes_kw)
+    # Third: battery objects at gen_bus
+    batt_obj = [
+        ob for ob in dssTree
+        if ob.get('bus1', 'x.x').split('.')[0] == gen_bus and 'storage' in ob.get('object', '')
+    ]
+    # Keep deterministic ordering like original
+    batt_obj.sort(key=lambda x: float(x.get('kwhrated', 0.0)))
+    batt_kws = [float(ob.get('kwrated', 0.0)) for ob in batt_obj]
+    batt_kwhs = [float(ob.get('kwhrated', 0.0)) for ob in batt_obj]
+    batt_kw = sum(batt_kws)
+    batt_kwh = sum(batt_kwhs)
+    # Net (load - rengen)
+    new_batt_loadshape = all_loads_shapes_kw - all_rengen_shapes
+    # Validate outage window
+    if outage_start < 0 or outage_end > len(new_batt_loadshape) or outage_end <= outage_start:
+        msg = f'Invalid outage window [{outage_start},{outage_end}) for loadshape length {len(new_batt_loadshape)}'
+        logger.warning(msg)
+        raise ValueError(msg)
+    new_batt_loadshape_sliced = new_batt_loadshape[outage_start:outage_end].astype(float)
+    # Cumulative existing battery shapes
+    cumulative_existing_batt_shapes = np.zeros(len(new_batt_loadshape))
+    for ob in batt_obj:
+        batt_shape_name = ob.get('yearly')
+        arr = _parse_mult_field(dssTree, batt_shape_name) if batt_shape_name else None
+        if arr is None:
+            logger.warning(f"Missing battery yearly shape for {ob.get('object')}; treating as zeros.")
+            arr = np.zeros_like(cumulative_existing_batt_shapes)
+        cumulative_existing_batt_shapes = cumulative_existing_batt_shapes + arr
+    # Starting capacity
+    try:
+        starting_capacity = batt_kwh + float(np.sum(cumulative_existing_batt_shapes[:outage_start]))
+    except Exception:
+        starting_capacity = batt_kwh
+    unsupported_load_kwh = 0.0
+    total_surplus = []
+    # Defensive casts
+    try:
+        batt_kw = float(batt_kw)
+    except Exception:
+        batt_kw = 0.0
+    try:
+        batt_kwh = float(batt_kwh)
+    except Exception:
+        batt_kwh = 0.0
+    battery_available_kwh = float(starting_capacity)
+    # Work on a copy
+    new_shape_arr = np.array(new_batt_loadshape_sliced, dtype=float)
+    for hour_idx in range(len(new_shape_arr)):
+        net_kw = new_shape_arr[hour_idx]  # positive => net load; negative => surplus
+        surplus_this_hour = 0.0
+        max_charge_kwh = batt_kw  # 1-hour timestep
+        max_discharge_kwh = min(batt_kw, battery_available_kwh)
+        if net_kw < 0:
+            pv_surplus_kwh = abs(net_kw)
+            available_space_kwh = max(0.0, batt_kwh - battery_available_kwh)
+            actual_charge_kwh = min(pv_surplus_kwh, max_charge_kwh, available_space_kwh)
+            battery_available_kwh += actual_charge_kwh
+            surplus_this_hour = pv_surplus_kwh - actual_charge_kwh
+            # positive => charging
+            new_shape_arr[hour_idx] = actual_charge_kwh
+        else:
+            needed_kwh = net_kw
+            actual_discharge_kwh = min(needed_kwh, max_discharge_kwh)
+            battery_available_kwh -= actual_discharge_kwh
+            # negative => discharging (match original sign convention)
+            new_shape_arr[hour_idx] = -actual_discharge_kwh
+            if needed_kwh > actual_discharge_kwh:
+                unsupported_load_kwh += (needed_kwh - actual_discharge_kwh)
+        total_surplus.append(surplus_this_hour)
+    # Assign back
+    new_batt_loadshape_sliced = new_shape_arr
+    # Build new dss tree shallow copy
+    new_dss_tree = [dict(ob) for ob in dssTree]
+    if batt_kwh > 0 and len(batt_obj) > 0:
+        for batt_ob in batt_obj:
+            try:
+                this_kwhr = float(batt_ob.get('kwhrated', 0.0))
+                this_kw = float(batt_ob.get('kwrated', 0.0))
+                factor = this_kwhr / batt_kwh if batt_kwh > 0 else 0.0
+                if this_kw > 0:
+                    per_unit_outage_shape = (new_batt_loadshape_sliced * factor) / this_kw
+                else:
+                    per_unit_outage_shape = np.zeros_like(new_batt_loadshape_sliced)
+                batt_loadshape_name = batt_ob.get('yearly')
+                found_index = None
+                for i, t in enumerate(new_dss_tree):
+                    if t.get('object') and batt_loadshape_name in t.get('object'):
+                        found_index = i
+                        break
+                if found_index is None:
+                    logger.warning(f"Could not find battery loadshape object for {batt_loadshape_name}; skipping replacement.")
+                    continue
+                full_loadshape_arr = _parse_mult_field(dssTree, batt_loadshape_name)
+                if full_loadshape_arr is None:
+                    logger.warning(f"Battery loadshape {batt_loadshape_name} missing or unparsable; skipping.")
+                    continue
+                full_loadshape_list = full_loadshape_arr.tolist()
+                if outage_end > len(full_loadshape_list):
+                    logger.warning(f"Outage slice ({outage_start}:{outage_end}) exceeds loadshape length ({len(full_loadshape_list)}). Truncating.")
+                    end_idx = min(outage_end, len(full_loadshape_list))
+                else:
+                    end_idx = outage_end
+                new_outage_vals = per_unit_outage_shape.tolist()
+                full_loadshape_list[outage_start:end_idx] = new_outage_vals[:end_idx - outage_start]
+                new_dss_tree[found_index]['mult'] = str(full_loadshape_list).replace(' ', '')
+            except Exception as e:
+                logger.warning(f"Error updating battery loadshape for {batt_ob.get('object', '<unknown>')}: {e}")
+    # Final return (matching original signature)
+    return new_dss_tree, new_batt_loadshape_sliced, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw
 
 def plot_manual_balance_approach(mg_key, year, outage_start, outage_end, outage_length, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw):
 	# Creates plot of manually constructed battery activity, load, and renewable generation (all cumulative).

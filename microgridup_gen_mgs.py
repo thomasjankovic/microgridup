@@ -577,6 +577,14 @@ def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_n
 			'gen_bus': this_gen_bus,
 			'gen_obs_existing': [ob.get('name') for ob in omd_list if ob.get('name') in MG_GROUP and ob.get('object') in ('generator','storage')]
 		}
+	# Validation checks.
+	for mg_name, mg in MICROGRIDS.items():
+		if not mg.get('switch'):
+			print(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
+			raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
+		if not mg.get('loads'):
+			print(f'Partitioning produced microgrid "{mg_name}" with no loads. Please ensure each MG has at least one load.')
+			raise ValueError(f'Partitioning produced microgrid "{mg_name}" with no loads. Please ensure each MG has at least one load.')
 	return MICROGRIDS
 
 def _tests():
