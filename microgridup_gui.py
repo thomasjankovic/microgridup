@@ -225,7 +225,8 @@ def duplicate():
 		inputs['MODEL_DIR'] = inputs['MODEL_DIR'].replace(model_name, new_name)
 		inputs['BASE_DSS'] = inputs['BASE_DSS'].replace(model_name, new_name)
 		inputs['LOAD_CSV'] = inputs['LOAD_CSV'].replace(model_name, new_name)
-		inputs['OUTAGE_CSV'] = inputs['OUTAGE_CSV'].replace(model_name, new_name)
+		if inputs.get('OUTAGE_CSV'):
+			inputs['OUTAGE_CSV'] = inputs['OUTAGE_CSV'].replace(model_name, new_name)
 		with open(f'{microgridup.PROJ_DIR}/{new_name}/allInputData.json', 'w') as file:
 			json.dump(inputs, file, indent=4)
 		# - Update output_final.html
