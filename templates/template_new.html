@@ -1182,6 +1182,23 @@
 			PARTITION_PARAMS = JSON.parse('{{ in_data.MICROGRIDS | tojson | safe }}');
 		}
 		form1.append('PARTITION_PARAMS',JSON.stringify(PARTITION_PARAMS));
+		// Do not proceed if user specifies multiple microgrids in manual/loadgrouping partitioning but doesn't assign loads to each microgrid. 
+		// Build the list of intended microgrid IDs (from the mg_name inputs)
+		const intendedMgIds = Object.keys(PARTITION_PARAMS.mg_name || {});
+		// Find mg ids that are intended but have no loads assigned
+		const emptyMgs = intendedMgIds
+		.filter(id => id !== 'None')
+		.filter(id => {
+			const loads = PARTITION_PARAMS.pairings[id];
+			// Treat undefined, null, or empty array as empty
+			return !(Array.isArray(loads) && loads.length > 0);
+		})
+		.map(id => PARTITION_PARAMS.mg_name[id] || id);
+		// If any, block submit with a clear message
+		if (emptyMgs.length) {
+			alert(`The following microgrids have no loads assigned: ${emptyMgs.join(', ')}. Please assign loads or remove them before running.`);
+			return;
+		}
 		// Append mgQuantity. 
 		const mgQuantity = document.getElementById('minQuantMgs').value || document.getElementById('mgQuantBranch').value || 0; // new_nx_group_branch.
 		form1.append('mgQuantity',mgQuantity);
