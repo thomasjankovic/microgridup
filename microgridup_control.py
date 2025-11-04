@@ -818,11 +818,11 @@ def sanitize_series(values, label, logger=None, axis_hint=None, max_ratio_thresh
     diagnostics['median'] = med
     # Axis_hint-based clamps
     if axis_hint == 'PU':
-        low, high = -10.0, 10.0
+        low, high = -0.1, 1.5
     elif axis_hint == 'percent':
-        low, high = -10.0, 200.0
+        low, high = -10.0, 100.0
     elif axis_hint == 'kW':
-        low, high = -1e9, 1e9
+        low, high = -500, 3000
     else:
         low, high = -1e15, 1e15
     if hard_clip_abs is not None:
@@ -1074,7 +1074,7 @@ def extract_charting_data(csvName, microgrids, y_list, outage_start, outage_leng
 				y_axis = list(y_axis_arr)
 
 			# Final sanitization for plotting
-			axis_hint = 'kW' if ('kW' in y_name or 'P' in y_name or 'Gen' in y_name) else ('PU' if ('PU' in y_name or 'V' in y_name) else None)
+			axis_hint = 'kW' if ('kW' in y_name or 'Gen' in y_name) else ('PU' if ('PU' in y_name or 'V' in y_name) else None)
 			y_axis_sanitized, diag = sanitize_series(y_axis, label=f'{csvName}:{monitor_name_phases}:{y_name}', logger=logger, axis_hint=axis_hint, expected_len=expected_len)
 			# Prepare legend group label for manual-balance
 			plot_legend_group = f'{legend_group} – Manual Balance Approach used during outage' if (rengen_mgs and legend_group in rengen_mgs) else legend_group
