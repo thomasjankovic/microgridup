@@ -190,9 +190,8 @@ def nx_group_branch(G, i_branch=0, omd={}):
 	bbl = nx_get_branches(edges_in_order)
 	bbl_indices_to_delete = set() # Add a check to ensure branch algo does not consider item level for branching when user created circuit with wizard.
 	for idx, bbl_item in enumerate(bbl):
-		bus = bbl_item[0]
-		if bus.endswith('_end'):
-			feeder_name = bus[0:-4]
+		if bbl_item.endswith('_end'):
+			feeder_name = bbl_item[0:-4]
 			ob_type = get_object_type_from_omd(feeder_name, omd)
 			if ob_type == 'line':
 				bbl_indices_to_delete.add(idx)
@@ -583,8 +582,9 @@ def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_n
 			print(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
 			raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
 		if not mg.get('loads'):
-			print(f'Partitioning produced microgrid "{mg_name}" with no loads. Please ensure each MG has at least one load.')
-			raise ValueError(f'Partitioning produced microgrid "{mg_name}" with no loads. Please ensure each MG has at least one load.')
+			msg = f'Partitioning method produced microgrid "{mg_name}" with no loads. Please choose a different partitioning method or ensure each microgrid has at least one load.'
+			print(msg)
+			raise ValueError(msg)
 	return MICROGRIDS
 
 def _tests():
