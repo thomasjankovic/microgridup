@@ -779,7 +779,7 @@ def _get_microgrids(critical_loads, partition_method, quantity, dss_path, partit
 		mg_groups = form_mg_groups(G, critical_loads, 'lukes', json.loads(partition_params_json))
 		microgrids = form_microgrids(G, mg_groups, omd)
 	elif partition_method == 'branch':
-		mg_groups = form_mg_groups(G, critical_loads, 'branch')
+		mg_groups = form_mg_groups(G, critical_loads, 'branch', algo_params={'omd':omd})
 		microgrids = form_microgrids(G, mg_groups, omd)
 	elif partition_method == 'bottomUp':
 		mg_groups = form_mg_groups(G, critical_loads, 'bottomUp', algo_params={'num_mgs':quantity, 'omd':omd, 'cannot_be_mg':['regcontrol']})
