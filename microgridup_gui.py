@@ -1,4 +1,4 @@
-import base64, io, json, multiprocessing, os, platform, shutil, datetime, time, markdown, re, traceback
+import json, multiprocessing, os, platform, shutil, datetime, time, markdown, re, traceback
 from pathlib import Path
 from subprocess import Popen
 from collections import OrderedDict
@@ -9,7 +9,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, Request, request, redirect, render_template, jsonify, url_for, send_from_directory, Blueprint
 from omf import geo
 from omf.solvers.opendss import dssConvert
-from microgridup_gen_mgs import nx_group_branch, nx_group_lukes, nx_bottom_up_branch, nx_critical_load_branch, get_all_trees, form_microgrids, form_mg_groups, topological_sort, SwitchNotFoundError, CycleDetectedError, InsufficientBranchPointsError
+from microgridup_gen_mgs import nx_group_branch, nx_group_lukes, nx_bottom_up_branch, nx_critical_load_branch, get_all_trees, form_microgrids, form_mg_groups, topological_sort, SwitchNotFoundError, CycleDetectedError, InsufficientBranchPointsError, _validate_mg_groups_feeders_and_substations
 # from microgridup_gen_mgs import new_nx_group_branch # Add to above imports when transitioning to new_nx_group_branch().
 import microgridup
 
@@ -625,7 +625,7 @@ def run():
 	new_proc.start()
 	# Redirect to home after waiting a little for the file creation to happen.
 	time.sleep(5)
-	return redirect(f'/')
+	return redirect(f'/load/{model_name}')
 
 def _get_uploaded_file_filepath(absolute_model_directory, filename, save_path, request, files_key, form_key):
 	'''
@@ -790,10 +790,12 @@ def _get_microgrids(critical_loads, partition_method, quantity, dss_path, partit
 	elif partition_method == 'loadGrouping':
 		algo_params = json.loads(partition_params_json)
 		mg_groups = form_mg_groups(G, critical_loads, 'loadGrouping', algo_params)
+		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json)
 		microgrids = form_microgrids(G, mg_groups, omd, switch_dict=algo_params.get('switch', None), gen_bus_dict=algo_params.get('gen_bus', None), mg_name_dict=algo_params.get('mg_name', None))
 	elif partition_method == 'manual':
 		algo_params = json.loads(partition_params_json)
 		mg_groups = form_mg_groups(G, critical_loads, 'manual', algo_params)
+		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json)
 		microgrids = form_microgrids(G, mg_groups, omd, switch_dict=algo_params.get('switch', None), gen_bus_dict=algo_params.get('gen_bus', None), mg_name_dict=algo_params.get('mg_name', None))
 	elif partition_method == '':
 		microgrids = json.loads(partition_params_json)
