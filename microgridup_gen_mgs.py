@@ -520,6 +520,78 @@ def get_edge_name(fr, to, omd_list):
 	# If still not found, raise error.
 	raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. No valid switch found between {fr} and {to}. Please change partitioning parameter(s).')
 
+def _validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=None):
+    '''
+    Validate that each microgrid group:
+      - contains nodes that exist in the graph G,
+      - is contained entirely within one weakly-connected component (all nodes reachable if edge directions are ignored) (within same substation's tree),
+      - maps to a single parent bus (feeder) where possible (i.e., does not span multiple feeders).
+    Raises ValueError on failure.
+    '''
+    # Map node -> component id
+    components = list(nx.weakly_connected_components(G))
+    node_to_comp = {}
+    for comp_id, comp_nodes in enumerate(components):
+        for n in comp_nodes:
+            node_to_comp[n] = comp_id
+    # Map omd names to objects for fast lookup
+    omd_by_name = {ob.get('name'): ob for ob in omd.values()}
+    # Optional mg names (user-supplied via partition params)
+    mg_name_map = {}
+    if partition_params_json:
+        try:
+            params = json.loads(partition_params_json) if isinstance(partition_params_json, str) else partition_params_json
+            mg_name_map = params.get('mg_name', {}) or {}
+        except Exception:
+            mg_name_map = {}
+    problems = []
+    for idx, group in enumerate(mg_groups):
+        mg_id = f'mg{idx}'
+        friendly = mg_name_map.get(mg_id, mg_id)
+        nodes = [n for n in group if n is not None and n != '']  # Guard against empty strings
+        if not nodes:
+            problems.append(f'{friendly} ({mg_id}) is empty.')
+            continue
+        # 1) Do all nodes exist in the graph?
+        missing = [n for n in nodes if n not in G.nodes()]
+        if missing:
+            problems.append(f'{friendly} ({mg_id}) contains unknown nodes: {missing}')
+            continue
+        # 2) Are they all in same weakly connected component?
+        comp_ids = { node_to_comp.get(n) for n in nodes }
+        if len(comp_ids) > 1:
+            problems.append(f'{friendly} ({mg_id}) spans multiple substations/trees; nodes: {nodes}')
+            continue
+        # 3) Collect parent buses for all nodes that have them
+        parent_buses = set()
+        for n in nodes:
+            ob = omd_by_name.get(n)
+            if not ob:
+                continue
+            parent = ob.get('parent') or ob.get('bus') or ob.get('bus1') or ob.get('parent_bus')
+            if parent:
+                parent_buses.add(str(parent).split('.')[0])
+        # If we found multiple distinct parent buses, group spans feeders -> problem
+        if len(parent_buses) > 1:
+            problems.append(f'{friendly} ({mg_id}) spans multiple feeder buses: {sorted(parent_buses)}; nodes: {nodes}')
+            continue
+        # If we found no parent buses, ensure at least one member of the group is a bus-type object in omd
+        if len(parent_buses) == 0:
+            found_bus_obj = False
+            for n in nodes:
+                ob = omd_by_name.get(n)
+                if ob and ob.get('object') and ob.get('object').lower() == 'bus':
+                    found_bus_obj = True
+                    break
+            if not found_bus_obj:
+                problems.append(f'{friendly} ({mg_id}) has no identifiable parent bus and contains no bus object; nodes: {nodes}')
+                continue
+    if problems:
+        msg = (
+            'Invalid microgrid partitioning: each microgrid must be wholly within a single substation/feeder tree and map to a single feeder bus. Problems found: ' + '; '.join(problems)
+        )
+        raise ValueError(msg)
+
 def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_name_dict=None):
 	'''
 	Generate microgrid data structure from a networkx graph, group of mgs, and omd. 
@@ -535,7 +607,7 @@ def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_n
 		M_ID, MG_GROUP, TREE_ROOT, BORDERS = all_mgs[idx]
 		mg_name = mg_name_dict[f'mg{M_ID}'] if mg_name_dict and mg_name_dict[f'mg{M_ID}'] else f'mg{M_ID}'
 		# Determine the switch(s) for borders, but be tolerant if get_edge_name raises
-		if switch_dict and switch_dict.get(f'mg{M_ID}') not in (None, ['']):
+		if switch_dict and switch_dict.get(f'mg{M_ID}') not in (None, [''], ''):
 			this_switch = switch_dict[f'mg{M_ID}']
 		else:
 			this_switch = []
@@ -579,8 +651,9 @@ def form_microgrids(G, MG_GROUPS, omd, switch_dict=None, gen_bus_dict=None, mg_n
 	# Validation checks.
 	for mg_name, mg in MICROGRIDS.items():
 		if not mg.get('switch'):
-			print(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
-			raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. Please change partitioning parameter(s).')
+			msg = f'Partitioning method produced microgrid "{mg_name}" with no switch. Please choose a different partitioning method or change other partitioning parameters.'
+			print(msg)
+			raise SwitchNotFoundError(msg)
 		if not mg.get('loads'):
 			msg = f'Partitioning method produced microgrid "{mg_name}" with no loads. Please choose a different partitioning method or ensure each microgrid has at least one load.'
 			print(msg)
