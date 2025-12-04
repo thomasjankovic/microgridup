@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 80
     steps:
-      - uses: actions/checkout@v2 # check-out the repository
+      - uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # check-out the repository
       - name: Build Docker image
         run: |
           docker build . -f Dockerfile -t mguim
