@@ -7,7 +7,7 @@ RUN apt-get -y update && apt-get install -y python3 git sudo vim python3-pip pyt
 
 # Install the OMF
 # Warning: clone might be cached. Consider invalidating manually.
-RUN git clone --depth 1 https://github.com/dpinney/omf.git
+RUN git clone --depth 1 https://github.com/nreca-bts/omf.git
 RUN cd omf; sudo python3 install.py
 # Install a compatible version of numpy<2.0.0
 RUN pip install numpy==1.26.4
