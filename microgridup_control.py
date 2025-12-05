@@ -253,7 +253,13 @@ def plot_inrush_data(dssPath, microgrids, out_html, outage_start, outage_end, ou
 		table_data['Microgrid ID'].append(key)
 
 		# # of Interruptions --> Number of times gen drops to zero during sim.
-		new_dss_tree, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw = do_manual_balance_approach(outage_start, outage_end, microgrids[key], dssTree, logger)
+		# new_dss_tree, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw = do_manual_balance_approach(outage_start, outage_end, microgrids[key], dssTree, logger)
+		compute_result = compute_manual_balance(outage_start, outage_end, microgrids[key], dssTree, logger)
+		new_dss_tree = apply_manual_balance_to_tree(compute_result, dssTree, logger)   # Need the tree for transformer/load lists below
+		new_batt_loadshape = list(compute_result['new_batt_loadshape_sliced'])
+		cumulative_existing_batt_shapes = list(compute_result['cumulative_existing_batt_shapes'])
+		all_rengen_shapes = list(compute_result['all_rengen_shapes'])
+		all_loads_shapes_kw = compute_result['all_loads_shapes_kw']
 		# Stole a few lines from plot_manual_balance_approach().
 		new_batt_loadshape = list(new_batt_loadshape)
 		cumulative_existing_batt_shapes = list(cumulative_existing_batt_shapes)
@@ -421,18 +427,28 @@ def _parse_mult_field(dss_tree, mult_name):
                 return None
     return None
 
-def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, logger):
+def compute_manual_balance(outage_start, outage_end, mg_values, dssTree, logger):
     '''
-    Manually constructs battery loadshapes for outage and reinserts into tree based on a proportional to kWh basis.
-    Returns: (new_dss_tree, new_batt_loadshape_sliced, cumulative_existing_batt_shapes,
-              all_rengen_shapes, total_surplus, all_loads_shapes_kw)
+    Given a dssTree (read-only), compute:
+	- per-hour net load (load - rengen)
+	- sliced outage battery loadshape (hours outage_start:outage_end)
+	- cumulative existing battery shapes (full-year)
+	- all_rengen_shapes (full-year)
+	- total_surplus list (per outage hour)
+	- all_loads_shapes_kw (full-year)
+	- batt_obj (list of battery objects found)
+	- batt_kwh, batt_kw (scalars)
+	- batt_obj_loadshape_names (list) to know which mult objects to replace later
+    No mutating dssTree
+    Returns a dict (compute_result)
     '''
+    # Validate inputs
     gen_bus = mg_values.get('gen_bus')
     if not gen_bus:
-        msg = f"Manual balance: missing gen_bus in microgrid values: {mg_values}"
+        msg = f'Manual balance: missing gen_bus in microgrid values: {mg_values}'
         logger.warning(msg)
         raise ValueError(msg)
-    # First: collect loads and their yearly shapes
+    # Collect loads and their yearly shapes
     all_mg_loads = [
         ob for ob in dssTree
         if ob.get('object') and ob.get('object').startswith('load.')
@@ -451,7 +467,7 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
             logger.warning(msg)
             raise ValueError(msg)
         load_shapes.append(arr)
-    # Ensure consistent length
+	# Ensure consistent length
     lengths = {len(a) for a in load_shapes}
     if len(lengths) != 1:
         msg = f'Inconsistent loadshape lengths for microgrid {gen_bus}: lengths {lengths}'
@@ -476,18 +492,18 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
         all_rengen_shapes = np.sum(np.vstack(rengen_shapes), axis=0)
     else:
         all_rengen_shapes = np.zeros_like(all_loads_shapes_kw)
-    # Third: battery objects at gen_bus
+    # Battery objects at gen_bus
     batt_obj = [
         ob for ob in dssTree
         if ob.get('bus1', 'x.x').split('.')[0] == gen_bus and 'storage' in ob.get('object', '')
     ]
-    # Keep deterministic ordering like original
+    # Deterministic ordering (small to large)
     batt_obj.sort(key=lambda x: float(x.get('kwhrated', 0.0)))
     batt_kws = [float(ob.get('kwrated', 0.0)) for ob in batt_obj]
     batt_kwhs = [float(ob.get('kwhrated', 0.0)) for ob in batt_obj]
     batt_kw = sum(batt_kws)
     batt_kwh = sum(batt_kwhs)
-    # Net (load - rengen)
+    # Net (load - rengen) (full-year)
     new_batt_loadshape = all_loads_shapes_kw - all_rengen_shapes
     # Validate outage window
     if outage_start < 0 or outage_end > len(new_batt_loadshape) or outage_end <= outage_start:
@@ -497,6 +513,7 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
     new_batt_loadshape_sliced = new_batt_loadshape[outage_start:outage_end].astype(float)
     # Cumulative existing battery shapes
     cumulative_existing_batt_shapes = np.zeros(len(new_batt_loadshape))
+    batt_obj_loadshape_names = []
     for ob in batt_obj:
         batt_shape_name = ob.get('yearly')
         arr = _parse_mult_field(dssTree, batt_shape_name) if batt_shape_name else None
@@ -504,7 +521,8 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
             logger.warning(f"Missing battery yearly shape for {ob.get('object')}; treating as zeros.")
             arr = np.zeros_like(cumulative_existing_batt_shapes)
         cumulative_existing_batt_shapes = cumulative_existing_batt_shapes + arr
-    # Starting capacity
+        batt_obj_loadshape_names.append(batt_shape_name)
+    # Starting capacity and battery simulation over outage slice
     try:
         starting_capacity = batt_kwh + float(np.sum(cumulative_existing_batt_shapes[:outage_start]))
     except Exception:
@@ -521,7 +539,7 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
     except Exception:
         batt_kwh = 0.0
     battery_available_kwh = float(starting_capacity)
-    # Work on a copy
+    # Work on a copy of the outage slice
     new_shape_arr = np.array(new_batt_loadshape_sliced, dtype=float)
     for hour_idx in range(len(new_shape_arr)):
         net_kw = new_shape_arr[hour_idx]  # positive => net load; negative => surplus
@@ -545,12 +563,41 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
             if needed_kwh > actual_discharge_kwh:
                 unsupported_load_kwh += (needed_kwh - actual_discharge_kwh)
         total_surplus.append(surplus_this_hour)
-    # Assign back
+    # Assign back final processed outage slice
     new_batt_loadshape_sliced = new_shape_arr
-    # Build new dss tree shallow copy
+    # Build and return compute_result dict
+    compute_result = {
+        'gen_bus': gen_bus,
+        'outage_start': int(outage_start),
+        'outage_end': int(outage_end),
+        'new_batt_loadshape_sliced': new_batt_loadshape_sliced,     # numpy array
+        'cumulative_existing_batt_shapes': cumulative_existing_batt_shapes,  # numpy array
+        'all_rengen_shapes': all_rengen_shapes,                     # numpy array
+        'total_surplus': total_surplus,                             # list
+        'all_loads_shapes_kw': all_loads_shapes_kw,                 # numpy array
+        'batt_obj': batt_obj,                                       # list of battery objects (dicts)
+        'batt_obj_loadshape_names': batt_obj_loadshape_names,       # list of string names
+        'batt_kwh': batt_kwh,
+        'batt_kw': batt_kw
+    }
+    return compute_result
+
+def apply_manual_balance_to_tree(compute_result, dssTree, logger):
+    '''
+    Take the compute_result (from compute_manual_balance) and return a new_dss_tree where battery 'mult' entries for batt_obj_loadshape_names have been patched to include the outage slice values computed in compute_manual_balance().
+    Does not modify the input dssTree in place — returns a shallow copy with the modified entries.
+    '''
+    outage_start = compute_result['outage_start']
+    outage_end = compute_result['outage_end']
+    new_batt_loadshape_sliced = compute_result['new_batt_loadshape_sliced']
+    batt_obj = compute_result['batt_obj']
+    batt_obj_loadshape_names = compute_result['batt_obj_loadshape_names']
+    batt_kwh = compute_result['batt_kwh']
+    # Shallow copy the tree (copy each dict)
     new_dss_tree = [dict(ob) for ob in dssTree]
     if batt_kwh > 0 and len(batt_obj) > 0:
-        for batt_ob in batt_obj:
+        # Iterate the batt_obj same order as compute()
+        for batt_ob, batt_shape_name in zip(batt_obj, batt_obj_loadshape_names):
             try:
                 this_kwhr = float(batt_ob.get('kwhrated', 0.0))
                 this_kw = float(batt_ob.get('kwrated', 0.0))
@@ -559,18 +606,18 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
                     per_unit_outage_shape = (new_batt_loadshape_sliced * factor) / this_kw
                 else:
                     per_unit_outage_shape = np.zeros_like(new_batt_loadshape_sliced)
-                batt_loadshape_name = batt_ob.get('yearly')
+                # Find the matching mult object index in new_dss_tree
                 found_index = None
                 for i, t in enumerate(new_dss_tree):
-                    if t.get('object') and batt_loadshape_name in t.get('object'):
+                    if t.get('object') and batt_shape_name in t.get('object'):
                         found_index = i
                         break
                 if found_index is None:
-                    logger.warning(f"Could not find battery loadshape object for {batt_loadshape_name}; skipping replacement.")
+                    logger.warning(f"Could not find battery loadshape object for {batt_shape_name}; skipping replacement.")
                     continue
-                full_loadshape_arr = _parse_mult_field(dssTree, batt_loadshape_name)
+                full_loadshape_arr = _parse_mult_field(dssTree, batt_shape_name)
                 if full_loadshape_arr is None:
-                    logger.warning(f"Battery loadshape {batt_loadshape_name} missing or unparsable; skipping.")
+                    logger.warning(f"Battery loadshape {batt_shape_name} missing or unparsable; skipping.")
                     continue
                 full_loadshape_list = full_loadshape_arr.tolist()
                 if outage_end > len(full_loadshape_list):
@@ -580,11 +627,27 @@ def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, log
                     end_idx = outage_end
                 new_outage_vals = per_unit_outage_shape.tolist()
                 full_loadshape_list[outage_start:end_idx] = new_outage_vals[:end_idx - outage_start]
+                # Store back without spaces
                 new_dss_tree[found_index]['mult'] = str(full_loadshape_list).replace(' ', '')
             except Exception as e:
                 logger.warning(f"Error updating battery loadshape for {batt_ob.get('object', '<unknown>')}: {e}")
-    # Final return (matching original signature)
-    return new_dss_tree, new_batt_loadshape_sliced, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw
+    return new_dss_tree
+
+def do_manual_balance_approach(outage_start, outage_end, mg_values, dssTree, logger):
+    '''
+    Backwards-compatible wrapper: compute -> apply -> return tuple
+    Keeps callers unaffected while separating implementation
+    '''
+    compute_result = compute_manual_balance(outage_start, outage_end, mg_values, dssTree, logger)
+    new_dss_tree = apply_manual_balance_to_tree(compute_result, dssTree, logger)
+    return (
+        new_dss_tree,
+        compute_result['new_batt_loadshape_sliced'],
+        compute_result['cumulative_existing_batt_shapes'],
+        compute_result['all_rengen_shapes'],
+        compute_result['total_surplus'],
+        compute_result['all_loads_shapes_kw']
+    )
 
 def plot_manual_balance_approach(mg_key, year, outage_start, outage_end, outage_length, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw):
 	# Creates plot of manually constructed battery activity, load, and renewable generation (all cumulative).
@@ -1650,7 +1713,14 @@ def play(data, outage_start, outage_length, logger):
 		else:
 			manual_balance_approach = True
 		# Manually construct battery loadshapes for outage.
-		new_dss_tree, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw = do_manual_balance_approach(outage_start, outage_end, mg, dssTree, logger)
+		# new_dss_tree, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw = do_manual_balance_approach(outage_start, outage_end, mg, dssTree, logger)
+		compute_result = compute_manual_balance(outage_start, outage_end, mg, dssTree, logger)
+		new_dss_tree = apply_manual_balance_to_tree(compute_result, dssTree, logger)
+		new_batt_loadshape = compute_result['new_batt_loadshape_sliced']
+		cumulative_existing_batt_shapes = compute_result['cumulative_existing_batt_shapes']
+		all_rengen_shapes = compute_result['all_rengen_shapes']
+		total_surplus = compute_result['total_surplus']
+		all_loads_shapes_kw = compute_result['all_loads_shapes_kw']
 		# Manual Balance Approach plotting call.
 		if manual_balance_approach == True:
 			fname = plot_manual_balance_approach(mg_name, 2019, outage_start, outage_end, outage_length, new_batt_loadshape, cumulative_existing_batt_shapes, all_rengen_shapes, total_surplus, all_loads_shapes_kw)
