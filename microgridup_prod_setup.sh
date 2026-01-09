@@ -51,7 +51,7 @@ fi
 # If you want a password, make a ./data/static/users.json with format {'username':'password'}.
 
 # Get our container and run it.
-docker pull ghcr.io/dpinney/microgridup:main
+docker pull ghcr.io/nreca-bts/microgridup:main
 if [ "$(docker ps -a -q -f name=mgucont)" ]; then
 	# already running, so kill it first
 	docker stop mgucont
@@ -63,7 +63,7 @@ docker run -d -p 80:80 -p 443:443 \
 	-v /etc/letsencrypt/live/$APP_DNS/fullchain.pem:/ssl/fullchain.pem \
 	-v /etc/letsencrypt/live/$APP_DNS/cert.pem:/ssl/cert.pem \
 	-v /etc/letsencrypt/live/$APP_DNS/privkey.pem:/ssl/privkey.pem \
-	--name mgucont ghcr.io/dpinney/microgridup:main
+	--name mgucont ghcr.io/nreca-bts/microgridup:main
 
 # Clean up old images and containers to save on disk.
 docker system prune -f
