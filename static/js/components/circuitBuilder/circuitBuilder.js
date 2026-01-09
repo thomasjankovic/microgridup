@@ -221,7 +221,7 @@ class CsvLoadParser {
         label.textContent = 'Load Data (.csv) ';
         const span = document.createElement('span');
         span.classList.add('classic');
-        span.textContent = 'Please upload a .csv file representing the hourly load shape. See https://github.com/dpinney/microgridup/blob/main/docs/input_formats.md for formatting details.';
+        span.textContent = 'Please upload a .csv file representing the hourly load shape. See https://github.com/nreca-bts/microgridup/blob/main/docs/input_formats.md for formatting details.';
         label.append(span);
         modal.divElement.append(label);
         const input = document.createElement('input');
