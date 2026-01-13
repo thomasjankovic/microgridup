@@ -184,3 +184,4 @@ dmypy.json
 # Specific dirs
 uploads
 scratch
+.git
