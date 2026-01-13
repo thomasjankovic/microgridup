@@ -11,6 +11,17 @@ jobs:
     timeout-minutes: 80
     steps:
       - uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # check-out the repository
+      - name: Show disk free and top repo files
+        run: |
+          df -h
+          sudo du -sh /home/runner/* || true
+          echo "--- top large files in repo (top 40) ---"
+          sudo du -ah --max-depth=2 . | sort -rh | head -n 40 || true
+      - name: Estimate and show docker build context size
+        run: |
+          git ls-files > /tmp/gitfiles.txt
+          echo "Files in context: $(wc -l /tmp/gitfiles.txt)"
+          tar -cf - -T /tmp/gitfiles.txt | wc -c | awk '{print $1 " bytes"}'
       - name: Build Docker image
         run: |
           docker build . -f Dockerfile -t mguim
