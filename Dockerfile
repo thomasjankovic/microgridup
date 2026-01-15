@@ -3,17 +3,16 @@ FROM ubuntu:22.04
 MAINTAINER <david.pinney@nreca.coop>
 
 # Install OS prereqs.
-RUN apt-get -y update && apt-get install -y python3 git sudo vim python3-pip python3-setuptools locales
+RUN apt-get -y update && apt-get install -y python3 git sudo vim python3-pip python3-setuptools locales && rm -rf /var/lib/apt/lists/*
 
 # Install the OMF
 # Warning: clone might be cached. Consider invalidating manually.
-RUN git clone --depth 1 https://github.com/nreca-bts/omf.git
-RUN cd omf; sudo python3 install.py
+RUN git clone --depth 1 https://github.com/nreca-bts/omf.git && cd omf && sudo python3 install.py && rm -rf /omf/.git
 # Install a compatible version of numpy<2.0.0
-RUN pip install numpy==1.26.4
+RUN python3 -m pip install --no-cache-dir numpy==1.26.4 && rm -rf /root/.cache/pip /root/.cache/pip/http
 
 # Force Julia install and reopt_jl setup.
-RUN python3 -c "import omf; omf.solvers.reopt_jl.install_reopt_jl()"
+RUN python3 -c "import omf; omf.solvers.reopt_jl.install_reopt_jl()" && rm -rf /julia-*.tar.gz /root/.cache/julia /tmp/* || true
 
 # Move files across.
 COPY . .
@@ -23,7 +22,7 @@ COPY . .
 # RUN pip install pygraphviz
 
 # Also need a package for auth
-RUN pip install flask_httpauth
+RUN python3 -m pip install --no-cache-dir flask_httpauth && rm -rf /root/.cache/pip /root/.cache/pip/http
 
 # Stupid workaround for an OpenDSS bug
 RUN mkdir -p /root/Documents
