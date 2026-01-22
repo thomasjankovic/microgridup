@@ -1,4 +1,5 @@
 import os, json, shutil, statistics, logging
+import tempfile
 from types import MappingProxyType
 from pathlib import Path
 import jinja2 as j2
@@ -826,6 +827,54 @@ def _create_production_factor_series_csv(data, logger, invalidate_cache):
 			shutil.rmtree('reopt_loadshapes')
 
 
+def apply_load_growth(immutable_data, logger):
+	'''
+    Apply load growth modifications to loads.csv based on user inputs.
+	'''
+	load_df = pd.read_csv('loads.csv')
+	# Ignore the timeseries column if it exists in loads.csv
+	n_rows = len(load_df)
+	expected_sum = n_rows * (n_rows + 1) // 2  # Sum of 1 to n_rows
+	if n_rows > 1 and load_df.iloc[:n_rows, 0].sum() == expected_sum:
+		load_df = load_df.iloc[:, 1:]
+		logger.info('Removed timeseries index column from loads.csv.')
+	# 1. Global growth: Multiply all loads by (1 + percent/100)
+	growth_percent = immutable_data.get('LOAD_GROWTH_PERCENT', 0.0)
+	if growth_percent != 0.0:
+		load_df.iloc[:, :] *= (1 + growth_percent / 100)  # Apply to all columns (loads only, index removed if present)
+		logger.info(f'Applied {growth_percent}% global load growth.')
+	# 2. Specific meter growth: Multiply specific columns by their factors
+	growth_specific = immutable_data.get('LOAD_GROWTH_SPECIFIC', {})
+	for meter, percent in growth_specific.items():
+		if meter in load_df.columns:
+			load_df[meter] *= (1 + percent / 100)
+			logger.info(f"Applied {percent}% growth to meter '{meter}'.")
+		else:
+			logger.warning(f"Meter '{meter}' not found in loads.csv; skipping growth.")
+	# 3. Additional loadshape: Add values from CSV to a specific meter
+	loadshape_path = immutable_data.get('ADDITIONAL_LOADSHAPE_CSV')
+	meter = immutable_data.get('ADDITIONAL_LOADSHAPE_METER', '')
+	if loadshape_path and meter and meter in load_df.columns:
+		try:
+			# add_df = pd.read_csv(loadshape_path, header=None)  # No header in additional loadshape CSV
+			add_df = pd.read_csv('additional_loadshape.csv', header=None)
+			if len(add_df.columns) == 1:
+				add_series = add_df.iloc[:, 0]
+				if len(add_series) == len(load_df):
+					load_df[meter] += add_series
+					logger.info(f'Added additional loadshape to meter "{meter}".')
+				else:
+					logger.error(f'Additional loadshape length ({len(add_series)}) does not match loads.csv ({len(load_df)}).')
+			else:
+				logger.error('Additional loadshape CSV must have exactly one column.')
+		except Exception as e:
+			logger.error(f'Error processing additional loadshape: {e}')
+	elif loadshape_path and meter:
+		logger.warning(f'Meter "{meter}" not found in loads.csv; skipping additional loadshape.')
+	# Save the modified DataFrame back to loads.csv
+	load_df.to_csv('loads.csv', index=False)
+
+
 def _tests():
 	# - Asssert that REopt's own tests pass
 	reopt_jl._test()
@@ -863,5 +912,85 @@ def _tests():
 	print('Ran all tests for microgridup_design.py.')
 
 
+def _test_apply_load_growth():
+	'''
+	Test the apply_load_growth function with various scenarios.
+	'''
+	# Set up logger
+	logger = microgridup.setup_logging('logs.log')
+	# Create temporary directory to avoid affecting real files
+	with tempfile.TemporaryDirectory() as temp_dir:
+		os.chdir(temp_dir)
+		# Create mock loads.csv (with timeseries index)
+		loads_data = {
+			'timeseries': list(range(1, 25)),  # 24 hours for simplicity
+			'meter1': [10] * 24,
+			'meter2': [20] * 24,
+			'meter3': [30] * 24
+		}
+		loads_df = pd.DataFrame(loads_data)
+		loads_df.to_csv('loads.csv', index=False)
+		# Test 1: Global growth
+		mock_data = MappingProxyType({
+			'LOAD_GROWTH_PERCENT': 10.0,  # 10% growth
+			'LOAD_GROWTH_SPECIFIC': {},
+			'ADDITIONAL_LOADSHAPE_CSV': None,
+			'ADDITIONAL_LOADSHAPE_METER': ''
+		})
+		apply_load_growth(mock_data, logger)
+		modified_df = pd.read_csv('loads.csv')
+		# Check that loads increased by 10% (index column should be removed)
+		assert modified_df['meter1'].iloc[0] == 11.0, f"Expected 11.0, got {modified_df['meter1'].iloc[0]}"
+		assert modified_df['meter2'].iloc[0] == 22.0, f"Expected 22.0, got {modified_df['meter2'].iloc[0]}"
+		print('Test 1 (Global growth): PASSED')
+		# Reset loads.csv for next test
+		loads_df.to_csv('loads.csv', index=False)
+		# Test 2: Specific meter growth
+		mock_data = MappingProxyType({
+			'LOAD_GROWTH_PERCENT': 0.0,
+			'LOAD_GROWTH_SPECIFIC': {'meter1': 5.0, 'meter2': 10.0},  # 5% to meter1, 10% to meter2
+			'ADDITIONAL_LOADSHAPE_CSV': None,
+			'ADDITIONAL_LOADSHAPE_METER': ''
+		})
+		apply_load_growth(mock_data, logger)
+		modified_df = pd.read_csv('loads.csv')
+		assert modified_df['meter1'].iloc[0] == 10.5, f"Expected 10.5, got {modified_df['meter1'].iloc[0]}"
+		assert modified_df['meter2'].iloc[0] == 22.0, f"Expected 22.0, got {modified_df['meter2'].iloc[0]}"
+		assert modified_df['meter3'].iloc[0] == 30.0, f"Expected 30.0, got {modified_df['meter3'].iloc[0]}"  # No change
+		print('Test 2 (Specific meter growth): PASSED')
+		# Reset loads.csv for next test
+		loads_df.to_csv('loads.csv', index=False)
+		# Test 3: Additional loadshape
+		# Create mock additional_loadshape.csv
+		additional_data = {'loadshape': [1] * 24}  # Add 1 kW to each hour
+		additional_df = pd.DataFrame(additional_data)
+		additional_df.to_csv('additional_loadshape.csv', index=False)
+		mock_data = MappingProxyType({
+			'LOAD_GROWTH_PERCENT': 0.0,
+			'LOAD_GROWTH_SPECIFIC': {},
+			'ADDITIONAL_LOADSHAPE_CSV': 'additional_loadshape.csv',  # Present
+			'ADDITIONAL_LOADSHAPE_METER': 'meter1'
+		})
+		apply_load_growth(mock_data, logger)
+		modified_df = pd.read_csv('loads.csv')
+		assert modified_df['meter1'].iloc[0] == 11.0, f"Expected 11.0, got {modified_df['meter1'].iloc[0]}"  # 10 + 1
+		assert modified_df['meter2'].iloc[0] == 20.0, f"Expected 20.0, got {modified_df['meter2'].iloc[0]}"  # No change
+		print('Test 3 (Additional loadshape): PASSED')
+		# Test 4: No changes (defaults)
+		loads_df.to_csv('loads.csv', index=False)
+		mock_data = MappingProxyType({
+			'LOAD_GROWTH_PERCENT': 0.0,
+			'LOAD_GROWTH_SPECIFIC': {},
+			'ADDITIONAL_LOADSHAPE_CSV': None,
+			'ADDITIONAL_LOADSHAPE_METER': ''
+		})
+		apply_load_growth(mock_data, logger)
+		modified_df = pd.read_csv('loads.csv')
+		assert modified_df['meter1'].iloc[0] == 10.0, f"Expected 10.0, got {modified_df['meter1'].iloc[0]}"
+		print('Test 4 (No changes): PASSED')
+	print('All apply_load_growth tests passed')
+
+
 if __name__ == '__main__':
 	_tests()
+	# _test_apply_load_growth()
