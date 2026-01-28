@@ -55,7 +55,6 @@ def main(data, invalidate_cache=True, open_results=False):
 	assert isinstance(data['REOPT_INPUTS'], dict)
 	assert 'LOAD_GROWTH_PERCENT' in data and isinstance(data['LOAD_GROWTH_PERCENT'], (int, float))
 	assert 'LOAD_GROWTH_SPECIFIC' in data and isinstance(data['LOAD_GROWTH_SPECIFIC'], dict)
-	# assert 'ADDITIONAL_LOADSHAPE_CSV' in data and isinstance(data['ADDITIONAL_LOADSHAPE_CSV'], str)
 	assert 'ADDITIONAL_LOADSHAPE_CSV' in data
 	assert 'ADDITIONAL_LOADSHAPE_METER' in data and isinstance(data['ADDITIONAL_LOADSHAPE_METER'], str)
 	# - jsCircuitModel is an optional key

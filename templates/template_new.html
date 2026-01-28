@@ -293,6 +293,25 @@
                     <a href="javascript:void(0)" class="toggle show">Optional inputs</a>
                     <div style="display:none">
                         <div id="year"></div>
+                        <div class="chunk">
+                            <!-- <label for="LOAD_GROWTH_PERCENT">Global Load Growth (%)</label> -->
+							<label class="tooltip" for="LOAD_GROWTH_PERCENT">Global Load Growth (%)<span class="classic">Input a whole number percentage to increase all loads by. increased_load = original_load * (1 + load_growth_percentage / 100).</span></label>
+                            <input type="number" name="LOAD_GROWTH_PERCENT" value="0" step="1" min="0" max="500">
+                        </div>
+                        <div class="chunk">
+                            <label class="tooltip" for="LOAD_GROWTH_SPECIFIC">Specific Load Growth (JSON format)<span class="classic">Input a JSON object with meter names and whole number percentages to increase specific loads. Example: {"meter1": 10, "meter2": 5} increases meter1 by 10% and meter2 by 5%.</span></label>
+                            <textarea name="LOAD_GROWTH_SPECIFIC" placeholder='{"meter1": 10, "meter2": 5}' rows="1"  cols="30"></textarea>
+                        </div>
+                        <div class="chunk">
+                            <label class="tooltip" for="ADDITIONAL_LOADSHAPE">Additional Loadshape (.csv)<span class="classic">Upload a CSV file with a single column of values to add to a specific meter's load profile. Must have the same number of rows as your load data (typically 8760 for one year of hourly data).</span></label>
+                            <input type="file" name="ADDITIONAL_LOADSHAPE" accept=".csv">
+                        </div>
+                        <div class="chunk">
+                            <label class="tooltip" for="ADDITIONAL_LOADSHAPE_METER">Meter for Additional Loadshape<span class="classic">Select which meter to apply the additional loadshape to. The dropdown populates automatically based on the meters in your load CSV.</span></label>
+                            <select name="ADDITIONAL_LOADSHAPE_METER" id="additionalLoadshapeMeterSelect">
+                                <option value="">Select a meter</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <h5>Resilience</h5>
@@ -1756,6 +1775,65 @@
 	};
 	window.disableInputs();
 	{% endif %}
+
+	// - Load Profile Validation
+	const loadProfileCsvLoadParser = new CsvLoadParser();
+	// - Create an observer for the circuit builder's csvLoadParser to sync meter names
+	class LoadProfileValidator {
+		handleParsedCsv() {
+			const loads = window.csvLoadParser.getLoads();
+			if (loads) {
+				const meterNames = loads.map(load => load.getProperty('name'));
+				populateMeterDropdown(meterNames);
+			}
+		}
+	}
+	const loadProfileValidator = new LoadProfileValidator();
+	window.csvLoadParser.addObserver(loadProfileValidator);
+
+	function populateMeterDropdown(meterNames) {
+		const select = document.getElementById('additionalLoadshapeMeterSelect');
+		if (!select) {
+			console.error('additionalLoadshapeMeterSelect not found');
+			return;
+		}
+		// Clear existing options except the first
+		while (select.options.length > 1) {
+			select.remove(1);
+		}
+		meterNames.forEach(name => {
+			const option = document.createElement('option');
+			option.value = name;
+			option.textContent = name;
+			select.appendChild(option);
+		});
+	}
+
+	// - Override submitEverything to add validation
+	const originalSubmitEverything = submitEverything;
+	submitEverything = async function() {
+		// Validate LOAD_GROWTH_SPECIFIC
+		const growthSpecificTextarea = document.querySelector('[name="LOAD_GROWTH_SPECIFIC"]');
+		if (growthSpecificTextarea && growthSpecificTextarea.value.trim()) {
+			try {
+				const growthSpecific = JSON.parse(growthSpecificTextarea.value);
+				const loads = window.csvLoadParser.getLoads();
+				const validMeterNames = new Set(loads.map(load => load.getProperty('name')));
+				for (const meter in growthSpecific) {
+					if (!validMeterNames.has(meter)) {
+						alert(`Invalid meter name "${meter}" in Specific Load Growth. Please select from available loads.`);
+						return;
+					}
+				}
+			} catch (e) {
+				alert('Invalid JSON in Specific Load Growth. Please check the format.');
+				return;
+			}
+		}
+
+		// Call original submitEverything
+		await originalSubmitEverything();
+	};
 	</script>
 </body>
 </html>
