@@ -53,8 +53,12 @@ def main(data, invalidate_cache=True, open_results=False):
 	assert 'threePhaseRelayCost' in data
 	assert 'REOPT_INPUTS' in data
 	assert isinstance(data['REOPT_INPUTS'], dict)
+	assert 'LOAD_GROWTH_PERCENT' in data and isinstance(data['LOAD_GROWTH_PERCENT'], (int, float))
+	assert 'LOAD_GROWTH_SPECIFIC' in data and isinstance(data['LOAD_GROWTH_SPECIFIC'], dict)
+	assert 'ADDITIONAL_LOADSHAPE_CSV' in data
+	assert 'ADDITIONAL_LOADSHAPE_METER' in data and isinstance(data['ADDITIONAL_LOADSHAPE_METER'], str)
 	# - jsCircuitModel is an optional key
-	assert len(data.keys()) == 12 or (len(data.keys()) == 13 and 'jsCircuitModel' in data)
+	assert len(data.keys()) in [15, 16] or (len(data.keys()) in [16, 17] and 'jsCircuitModel' in data)
 	assert isinstance(invalidate_cache, bool)
 	assert isinstance(open_results, bool)
 	# Quick check to ensure MODEL_DIR contains only lowercase alphanumeric and dashes. No spaces or underscores.
@@ -111,6 +115,8 @@ def main(data, invalidate_cache=True, open_results=False):
 	_copy_files_from_uploads_into_model_dir(immutable_data['LOAD_CSV'], f'{absolute_model_directory}/loads.csv', logger)
 	if immutable_data['OUTAGE_CSV'] is not None:
 		_copy_files_from_uploads_into_model_dir(immutable_data['OUTAGE_CSV'], f'{absolute_model_directory}/outages.csv', logger)
+	if immutable_data['ADDITIONAL_LOADSHAPE_CSV'] is not None:
+		_copy_files_from_uploads_into_model_dir(immutable_data['ADDITIONAL_LOADSHAPE_CSV'], f'{absolute_model_directory}/additional_loadshape.csv', logger)
 	os.system(f'touch "{absolute_model_directory}/0running.txt"')
 	try:
 		os.remove(f"{absolute_model_directory}/0crashed.txt")
@@ -118,6 +124,8 @@ def main(data, invalidate_cache=True, open_results=False):
 		pass
 	# Run the full MicrogridUP analysis.
 	try:
+		# Apply load growth to the loads.csv file
+		microgridup_design.apply_load_growth(immutable_data, logger)
 		# - Calculate hosting capacity for the initial circuit uploaded by the user or created via the GUI
 		microgridup_hosting_cap.run_hosting_capacity()
 		# - For each microgrid, use REOPT to calculate the optimal amount of new generation assets and to calculate generation power output
@@ -527,7 +535,7 @@ def get_immutable_dict(data):
 	'''
 	Get an immutable copy of the data. Functions later in the call stack shouldn't need to modify the data. They should only need to read pieces of it
 	to write some output. Working with an immutable dict is a way to maintain sanity as it gets passed around among all of our functions. This
-	function is recommened, but is not required (i.e. it could be commented-out and ignored completely)
+	function is recommended, but is not required (i.e. it could be commented-out and ignored completely)
 
 	:param data: all of the data we need to run our model
 	:type data: dict

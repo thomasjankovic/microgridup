@@ -553,6 +553,11 @@ def run():
 	data['OUTAGE_CSV'] = _get_uploaded_file_filepath(absolute_model_directory, 'outages.csv', f'{microgridup.MGU_DIR}/uploads/HISTORICAL_OUTAGES_{model_name}', request, 'HISTORICAL_OUTAGES', 'OUTAGES_PATH')
 	data['LOAD_CSV'] = _get_uploaded_file_filepath(absolute_model_directory, 'loads.csv', f'{microgridup.MGU_DIR}/uploads/LOAD_CSV_{model_name}', request, 'LOAD_CSV', 'LOAD_CSV_NAME')
 	data['BASE_DSS'] = _get_uploaded_file_filepath(absolute_model_directory, 'circuit.dss', f'{microgridup.MGU_DIR}/uploads/BASE_DSS_{model_name}', request, None, 'DSS_PATH')
+	data['ADDITIONAL_LOADSHAPE_CSV'] = _get_uploaded_file_filepath(absolute_model_directory, 'additional_loadshape.csv', f'{microgridup.MGU_DIR}/uploads/ADDITIONAL_LOADSHAPE_{model_name}', request, 'ADDITIONAL_LOADSHAPE', 'ADDITIONAL_LOADSHAPE_NAME')
+	data['ADDITIONAL_LOADSHAPE_METER'] = request.form.get('ADDITIONAL_LOADSHAPE_METER', '')  # Meter name from form
+	# Clean up like LOAD_CSV
+	if 'ADDITIONAL_LOADSHAPE_NAME' in data:
+		del data['ADDITIONAL_LOADSHAPE_NAME']
 	# - Delete form keys that are not currently used past this point
 	del data['DSS_PATH']
 	del data['OUTAGES_PATH']
@@ -563,6 +568,8 @@ def run():
 	# - Format the REopt inputs into the schema we want. This formatting needs to be done here (and not in microgridup.main) because otherwise
 	#   invocations of microgridup.main() would require REopt keys to be at the top level of the user's input dict, which would be really annoying
 	data['REOPT_INPUTS'] = _get_reopt_inputs(data)
+	data['LOAD_GROWTH_PERCENT'] = float(request.form.get('LOAD_GROWTH_PERCENT', 0.0))  # Default to 0% (no growth)
+	data['LOAD_GROWTH_SPECIFIC'] = json.loads(request.form.get('LOAD_GROWTH_SPECIFIC') or '{}') # Default to empty dict
 	# - Format relevant properties for _get_microgrids()
 	data['CRITICAL_LOADS'] = json.loads(data['CRITICAL_LOADS'])
 	if len(data['CRITICAL_LOADS']) == 0:
