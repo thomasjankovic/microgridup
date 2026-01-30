@@ -58,7 +58,6 @@ def main(data, invalidate_cache=True, open_results=False):
 	assert 'ADDITIONAL_LOADSHAPE_CSV' in data
 	assert 'ADDITIONAL_LOADSHAPE_METER' in data and isinstance(data['ADDITIONAL_LOADSHAPE_METER'], str)
 	# - jsCircuitModel is an optional key
-	print('Number of keys in data:', len(data.keys()))
 	assert len(data.keys()) in [15, 16] or (len(data.keys()) in [16, 17] and 'jsCircuitModel' in data)
 	assert isinstance(invalidate_cache, bool)
 	assert isinstance(open_results, bool)

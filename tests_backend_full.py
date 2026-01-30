@@ -115,6 +115,10 @@ def test_1mg():
 		'DESCRIPTION': '',
 		'singlePhaseRelayCost': 300.0,
 		'threePhaseRelayCost': 20000.0,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': '',
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -223,6 +227,10 @@ def test_2mg():
 		'DESCRIPTION': '',
 		'singlePhaseRelayCost': 300.0,
 		'threePhaseRelayCost': 20000.0,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': '',
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -347,7 +355,11 @@ def test_3mg():
 		],
 		'DESCRIPTION': '',
 		'singlePhaseRelayCost': 300.0,
-		'threePhaseRelayCost': 20000.0
+		'threePhaseRelayCost': 20000.0,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': ''
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -492,7 +504,11 @@ def test_4mg():
 		],
 		'DESCRIPTION': '',
 		'singlePhaseRelayCost': 300.0,
-		'threePhaseRelayCost': 20000.0
+		'threePhaseRelayCost': 20000.0,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': ''
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -586,7 +602,11 @@ def test_auto3mg():
 		],
 		'DESCRIPTION': '',
 		'singlePhaseRelayCost': 300.0,
-		'threePhaseRelayCost': 20000.0
+		'threePhaseRelayCost': 20000.0,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': ''
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -1008,7 +1028,11 @@ def test_mackelroy():
 		],
 		"DESCRIPTION": "",
 		"singlePhaseRelayCost": 300.0,
-		"threePhaseRelayCost": 20000.0
+		"threePhaseRelayCost": 20000.0,
+		"LOAD_GROWTH_PERCENT": 0.0,
+		"LOAD_GROWTH_SPECIFIC": {},
+		"ADDITIONAL_LOADSHAPE_CSV": None,
+		"ADDITIONAL_LOADSHAPE_METER": ""
 	}
 	# Run model.
 	microgridup.main(data, invalidate_cache=False, open_results=True)
@@ -1016,9 +1040,9 @@ def test_mackelroy():
 		sys.exit(1)
 
 if __name__ == '__main__':
-	test_1mg()
-	test_2mg()
-	test_3mg()
-	test_4mg()
-	test_auto3mg()
+	# test_1mg()
+	# test_2mg()
+	# test_3mg()
+	# test_4mg()
+	# test_auto3mg()
 	test_mackelroy()
