@@ -1040,9 +1040,9 @@ def test_mackelroy():
 		sys.exit(1)
 
 if __name__ == '__main__':
-	# test_1mg()
-	# test_2mg()
-	# test_3mg()
-	# test_4mg()
-	# test_auto3mg()
+	test_1mg()
+	test_2mg()
+	test_3mg()
+	test_4mg()
+	test_auto3mg()
 	test_mackelroy()
