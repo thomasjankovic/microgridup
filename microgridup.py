@@ -513,19 +513,119 @@ def get_all_colorable_elements(dss_path, omd_path=None):
 	return colorable_elements
 
 
+def _to_float(value, default=0.0):
+	try:
+		return float(value)
+	except (TypeError, ValueError):
+		return float(default)
+
+
+def _to_bool(value):
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, str):
+		return value.strip().lower() in ('1', 'true', 'yes', 'on')
+	return bool(value)
+
+
+def _get_outage_feasibility_diagnostics(reopt_folder, kwh_per_gallon=13.105):
+	'''
+	Return a dictionary of outage feasibility diagnostics if enough input data exists.
+	Returns None when data is missing or no outage is configured.
+	'''
+	all_input_path = f'{reopt_folder}/allInputData.json'
+	critical_shape_path = f'{reopt_folder}/criticalLoadShape.csv'
+	if not os.path.isfile(all_input_path) or not os.path.isfile(critical_shape_path):
+		return None
+	with open(all_input_path) as f:
+		all_input = json.load(f)
+	outage_start_hour = int(_to_float(all_input.get('outage_start_hour', 0), 0))
+	outage_duration = int(_to_float(all_input.get('outageDuration', 0), 0))
+	if outage_start_hour == 0 or outage_duration <= 0:
+		return None
+	critical_load_series = pd.read_csv(critical_shape_path, header=None)[0]
+	outage_critical_load = critical_load_series.iloc[outage_start_hour:outage_start_hour + outage_duration]
+	if outage_critical_load.empty:
+		return None
+	outage_peak_kw = float(outage_critical_load.max())
+	outage_energy_kwh = float(outage_critical_load.sum())
+	diesel_max_kw = _to_float(all_input.get('dieselMax', 0.0), 0.0)
+	gen_existing_kw = _to_float(all_input.get('genExisting', 0.0), 0.0)
+	battery_power_max_kw = _to_float(all_input.get('batteryPowerMax', 0.0), 0.0)
+	battery_power_existing_kw = _to_float(all_input.get('batteryKwExisting', 0.0), 0.0)
+	battery_capacity_max_kwh = _to_float(all_input.get('batteryCapacityMax', 0.0), 0.0)
+	battery_capacity_existing_kwh = _to_float(all_input.get('batteryKwhExisting', 0.0), 0.0)
+	fuel_available_gal = _to_float(all_input.get('fuelAvailable', 0.0), 0.0)
+	diesel_only_runs_during_outage = _to_bool(all_input.get('dieselOnlyRunsDuringOutage', False))
+	firm_power_cap_kw = diesel_max_kw + gen_existing_kw + battery_power_max_kw + battery_power_existing_kw
+	battery_energy_cap_kwh = battery_capacity_max_kwh + battery_capacity_existing_kwh
+	remaining_energy_after_battery_kwh = max(0.0, outage_energy_kwh - battery_energy_cap_kwh)
+	required_fuel_gal = 0.0 if kwh_per_gallon <= 0 else (remaining_energy_after_battery_kwh / kwh_per_gallon)
+	power_bound_violated = outage_peak_kw > firm_power_cap_kw
+	fuel_bound_violated = diesel_only_runs_during_outage and required_fuel_gal > fuel_available_gal
+	return {
+		'outage_peak_kw': outage_peak_kw,
+		'outage_energy_kwh': outage_energy_kwh,
+		'firm_power_cap_kw': firm_power_cap_kw,
+		'battery_energy_cap_kwh': battery_energy_cap_kwh,
+		'remaining_energy_after_battery_kwh': remaining_energy_after_battery_kwh,
+		'required_fuel_gal': required_fuel_gal,
+		'fuel_available_gal': fuel_available_gal,
+		'power_bound_violated': power_bound_violated,
+		'fuel_bound_violated': fuel_bound_violated,
+		'kwh_per_gallon_assumed': kwh_per_gallon
+	}
+
+
 def check_each_mg_for_reopt_error(MICROGRIDS, logger):
 	for mg in MICROGRIDS:
 		path = f'reopt_{mg}/results.json'
 		if os.path.isfile(path):
 			with open(path) as file:
 				results = json.load(file)
-			if results.get('Messages',{}).get('errors',{}):
-				error_message_list = results.get('Messages',{}).get('errors',{})
+			messages = results.get('Messages', {})
+			error_message_list = messages.get('errors', [])
+			warning_message_list = messages.get('warnings', [])
+			status = results.get('status')
+			if status and status != 'optimal':
+				logger.warning(f'REopt status in folder reopt_{mg}: {status}')
+				print(f'REopt status in folder reopt_{mg}: {status}')
+				diagnostics = _get_outage_feasibility_diagnostics(f'reopt_{mg}')
+				if diagnostics and (diagnostics['power_bound_violated'] or diagnostics['fuel_bound_violated']):
+					diagnostic_lines = [
+						f'Likely outage feasibility issue in reopt_{mg}: critical outage load exceeds configured generation and/or fuel bounds.'
+					]
+					if diagnostics['power_bound_violated']:
+						diagnostic_lines.append(
+							'Power bound exceeded: outage peak critical load '
+							f'({diagnostics["outage_peak_kw"]:.2f} kW) > firm dispatchable cap '
+							f'({diagnostics["firm_power_cap_kw"]:.2f} kW, calculated as dieselMax + genExisting + batteryPowerMax + batteryKwExisting).'
+						)
+					if diagnostics['fuel_bound_violated']:
+						diagnostic_lines.append(
+							'Fuel bound exceeded: outage critical energy '
+							f'({diagnostics["outage_energy_kwh"]:.2f} kWh) minus battery energy cap '
+							f'({diagnostics["battery_energy_cap_kwh"]:.2f} kWh) leaves '
+							f'{diagnostics["remaining_energy_after_battery_kwh"]:.2f} kWh for diesel, '
+							f'requiring about {diagnostics["required_fuel_gal"]:.2f} gal '
+							f'(assumed {diagnostics["kwh_per_gallon_assumed"]:.1f} kWh/gal) while fuelAvailable is '
+							f'{diagnostics["fuel_available_gal"]:.2f} gal.'
+						)
+					diagnostic_lines.append(
+						f'Action: increase dieselMax/fuelAvailable, reduce outageDuration, reduce critical load, or enable more battery/wind/solar for reopt_{mg}.'
+					)
+					diagnostic_msg = ' '.join(diagnostic_lines)
+					print(diagnostic_msg)
+					logger.warning(diagnostic_msg)
+			if error_message_list:
 				print(f'Error in REopt folder reopt_{mg}: {error_message_list}')
 				logger.warning(f'Error in REopt folder reopt_{mg}: {error_message_list}')
-			else:
-				logger.warning(f'No error messages returned in REopt folder reopt_{mg}.')
-				print(f'No error messages returned in REopt folder reopt_{mg}.')
+			if warning_message_list:
+				print(f'Warning in REopt folder reopt_{mg}: {warning_message_list}')
+				logger.warning(f'Warning in REopt folder reopt_{mg}: {warning_message_list}')
+			if not error_message_list and not warning_message_list:
+				logger.warning(f'No error or warning messages returned in REopt folder reopt_{mg}.')
+				print(f'No error or warning messages returned in REopt folder reopt_{mg}.')
 		else:
 			print(f'An Exception occured but results.json in REopt folder reopt_{mg} does not exist.')
 			logger.warning(f'An Exception occured but results.json in REopt folder reopt_{mg} does not exist.')

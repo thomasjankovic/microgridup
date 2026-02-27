@@ -244,6 +244,20 @@
                 width: 93%;
                 margin-left: 4%;
             }
+            #logs-container {
+                white-space: pre-wrap;
+            }
+            .log-line {
+                margin-bottom: 0.15rem;
+            }
+            .log-line.log-line--highlight {
+                border-left: 4px solid darkgray;
+                background-color: lightgray;
+                font-weight: bold;
+                font-style: italic;
+                padding: 0.4rem 0.5rem;
+                margin: 0.35rem 0;
+            }
         </style>
     </head>
     <body>
@@ -310,13 +324,32 @@
             </div>
         </main>
         <script>
+        function isOutageFeasibilityLine(logLine) {
+            return logLine.includes('Likely outage feasibility issue in reopt_');
+        }
+
+        function renderLogs(logs) {
+            const logContainer = document.getElementById('logs-container');
+            logContainer.innerHTML = '';
+
+            for (const rawLine of logs) {
+                const line = rawLine.replace(/\n$/, '');
+                const lineElement = document.createElement('div');
+                lineElement.className = 'log-line';
+                if (isOutageFeasibilityLine(line)) {
+                    lineElement.classList.add('log-line--highlight');
+                }
+                lineElement.textContent = line;
+                logContainer.appendChild(lineElement);
+            }
+        }
+
         // Function to fetch logs from the server and update the page.
         async function fetchLogs(model_name) {
-            const logContainer = document.getElementById('logs-container');
             try {
                 const response = await fetch(`/get_logs/${model_name}`);
                 const responseJson = await response.json();
-                logContainer.innerHTML = responseJson.logs.join('<br>');
+                renderLogs(responseJson.logs);
             } catch (error) { alert(error); }
         }
 
