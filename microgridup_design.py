@@ -88,6 +88,8 @@ def create_economic_microgrid(data, logger, invalidate_cache):
 		load_df = pd.read_csv('loads.csv')
 		load_df = load_df.iloc[:, load_df.apply(is_not_timeseries_column).to_list()]
 		load_shape_series = load_df.apply(sum, axis=1)
+		# TEMPORARY: clamp negative load values to 0 to diagnose REopt infeasibility
+		load_shape_series = load_shape_series.clip(lower=0)
 		load_shape_series.to_csv('reopt_mgEconomic/loadShape.csv', header=False, index=False)
 		# - Set user parameters
 		lat, lon = microgridup_hosting_cap.get_microgrid_coordinates(list(data['MICROGRIDS'].values())[0])
@@ -251,6 +253,8 @@ def _set_allinputdata_load_shape_parameters(data, mg_name, reopt_dirname, logger
 	load_df = load_df.iloc[:, load_df.apply(is_not_timeseries_column).to_list()]
 	# - Write loadShape.csv
 	load_shape_series = load_df.apply(sum, axis=1)
+	# TEMPORARY: clamp negative load values to 0 to diagnose REopt infeasibility
+	load_shape_series = load_shape_series.clip(lower=0)
 	load_shape_series.to_csv(reopt_dirname + '/loadShape.csv', header=False, index=False)
 	# - <reopt_dirname>/allInputData.json was already created by microgridDesign.new, so read it
 	with open(reopt_dirname + '/allInputData.json') as f:
@@ -269,6 +273,8 @@ def _set_allinputdata_load_shape_parameters(data, mg_name, reopt_dirname, logger
 	#   code always outputs microgrid load names in lowercase, so I have to convert the DataFrame column names to lowercase if I want to access data
 	#   in the microgrid object without crashing due to a key error
 	critical_load_shape_series = load_df[column_selection].apply(sum, axis=1)
+	# TEMPORARY: clamp negative critical load values to 0 to diagnose REopt infeasibility
+	critical_load_shape_series = critical_load_shape_series.clip(lower=0)
 	critical_load_shape_series.to_csv(reopt_dirname + '/criticalLoadShape.csv', header=False, index=False)
 	with open(reopt_dirname + '/criticalLoadShape.csv') as f:
 		allInputData['criticalLoadShape'] = f.read()
