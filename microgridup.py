@@ -346,6 +346,106 @@ def summary_stats(reps):
 	return reps
 
 
+def _get_stats_value(stats, key, idx, default=0.0):
+	values = stats.get(key, [])
+	if idx >= len(values):
+		return float(default)
+	return _to_float(values[idx], default)
+
+
+def _get_cost_rate_from_reopt(reopt_dirname, input_key, output_key):
+	all_input_data = {}
+	all_output_data = {}
+	try:
+		with open(f'{reopt_dirname}/allInputData.json') as in_file:
+			all_input_data = json.load(in_file)
+	except (FileNotFoundError, json.JSONDecodeError):
+		all_input_data = {}
+	try:
+		with open(f'{reopt_dirname}/allOutputData.json') as out_file:
+			all_output_data = json.load(out_file)
+	except (FileNotFoundError, json.JSONDecodeError):
+		all_output_data = {}
+	return _to_float(
+		all_output_data.get(output_key, all_input_data.get(input_key, 0.0)),
+		all_input_data.get(input_key, 0.0)
+	)
+
+
+def _get_mg_upgrade_cost(mg_name):
+	try:
+		mg_add_cost_df = pd.read_csv(f'mg_add_cost_{mg_name}.csv')
+		return _to_float(mg_add_cost_df['Cost Estimate ($)'].sum(), 0.0)
+	except (FileNotFoundError, KeyError, pd.errors.EmptyDataError):
+		return 0.0
+
+
+def _build_cost_breakdown_chart(stats, legend_spec, chart_height):
+	mg_names = [name for name in stats.get('Microgrid Name', []) if name != 'Summary']
+	if not mg_names:
+		return ''
+	cost_series = {
+		'Solar PV': [],
+		'Wind': [],
+		'Battery Power': [],
+		'Battery Energy': [],
+		'Genset': [],
+		'Distribution Upgrades': []
+	}
+	for idx, mg_name in enumerate(stats.get('Microgrid Name', [])):
+		if mg_name == 'Summary':
+			continue
+		reopt_dirname = f'reopt_{mg_name}'
+		cost_rates = {
+			'Solar PV': _get_cost_rate_from_reopt(reopt_dirname, 'solarCost', 'solarCost1'),
+			'Wind': _get_cost_rate_from_reopt(reopt_dirname, 'windCost', 'windCost1'),
+			'Battery Power': _get_cost_rate_from_reopt(reopt_dirname, 'batteryPowerCost', 'batteryPowerCost1'),
+			'Battery Energy': _get_cost_rate_from_reopt(reopt_dirname, 'batteryCapacityCost', 'batteryCapacityCost1'),
+			'Genset': _get_cost_rate_from_reopt(reopt_dirname, 'dieselGenCost', 'dieselGenCost1')
+		}
+		cost_series['Solar PV'].append(max(_get_stats_value(stats, 'New Solar (kW)', idx), 0.0) * cost_rates['Solar PV'])
+		cost_series['Wind'].append(max(_get_stats_value(stats, 'New Wind (kW)', idx), 0.0) * cost_rates['Wind'])
+		cost_series['Battery Power'].append(max(_get_stats_value(stats, 'New Battery Power (kW)', idx), 0.0) * cost_rates['Battery Power'])
+		cost_series['Battery Energy'].append(max(_get_stats_value(stats, 'New Battery Energy Storage (kWh)', idx), 0.0) * cost_rates['Battery Energy'])
+		cost_series['Genset'].append(max(_get_stats_value(stats, 'New Fossil Generation (kW)', idx), 0.0) * cost_rates['Genset'])
+		cost_series['Distribution Upgrades'].append(_get_mg_upgrade_cost(mg_name))
+	if not any(sum(values) > 0 for values in cost_series.values()):
+		return ''
+	labels = mg_names + ['Portfolio Total']
+	cost_breakdown_fig = go.Figure()
+	for series_name, values in cost_series.items():
+		totalled_values = values + [sum(values)]
+		if any(v > 0 for v in totalled_values):
+			cost_breakdown_fig.add_trace(go.Bar(
+				name=series_name,
+				x=labels,
+				y=totalled_values,
+				hovertemplate='%{x}<br>%{fullData.name}: $%{y:,.0f}<extra></extra>'
+			))
+	cost_breakdown_fig.update_layout(
+		title='Estimated Capital Cost Breakdown by Source',
+		legend=legend_spec,
+		barmode='stack',
+		yaxis={'tickprefix': "$"},
+		xaxis={'title': 'Microgrid'},
+		font=dict(
+			family="sans-serif",
+			color="black"
+		)
+	)
+	cost_breakdown_fig.add_annotation(
+		text='Estimated from recommended new asset sizes plus distribution upgrade items.',
+		xref='paper',
+		yref='paper',
+		x=0,
+		y=1.14,
+		showarrow=False,
+		xanchor='left',
+		font={'size': 12}
+	)
+	return cost_breakdown_fig.to_html(default_height=chart_height)
+
+
 def summary_charts(stats):
 	''' Generate HTML for summary overview charts. '''
 	# Global chart material
@@ -466,7 +566,8 @@ def summary_charts(stats):
 		)
 	)
 	money_summary_html = money_summary_fig.to_html(default_height=chart_height)
-	all_html = money_summary_html + gen_load_html + gen_mix_html
+	cost_breakdown_html = _build_cost_breakdown_chart(stats, legend_spec, chart_height)
+	all_html = money_summary_html + cost_breakdown_html + gen_load_html + gen_mix_html
 	return all_html
 
 

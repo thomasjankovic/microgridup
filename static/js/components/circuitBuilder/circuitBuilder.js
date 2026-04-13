@@ -288,7 +288,7 @@ class CsvLoadParser {
         if (data.data.length < 8760) {
             throw Error('CSV parsing failed. A CSV must have at least 8760 rows, not including the required heading row.');
         }
-        const lowercaseHeadings = data.data[0].map(heading => heading.toLowerCase());
+        const lowercaseHeadings = data.data[0].map(heading => String(heading ?? '').trim().toLowerCase());
         if (new Set(lowercaseHeadings).size !== lowercaseHeadings.length) {
             throw Error('Please ensure that load profile CSV headings are case-insensitive unique.');
         }

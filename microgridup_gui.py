@@ -14,6 +14,8 @@ from microgridup_gen_mgs import nx_group_branch, nx_group_lukes, nx_bottom_up_br
 import microgridup
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
+app.config['MAX_FORM_MEMORY_SIZE'] = 16 * 1024 * 1024  # 16 MB
 
 '''Set error handlers.'''
 @app.errorhandler(ValueError) # Helpful for unexpected Python function errors.

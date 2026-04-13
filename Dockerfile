@@ -24,6 +24,9 @@ COPY . .
 # Also need a package for auth
 RUN python3 -m pip install --no-cache-dir flask_httpauth && rm -rf /root/.cache/pip /root/.cache/pip/http
 
+# Needed by microgridup_gui doc rendering import
+RUN python3 -m pip install --no-cache-dir markdown && rm -rf /root/.cache/pip /root/.cache/pip/http
+
 # Stupid workaround for an OpenDSS bug
 RUN mkdir -p /root/Documents
 
