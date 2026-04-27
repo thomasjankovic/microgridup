@@ -823,6 +823,42 @@ def _mg_add_cost(data, mg_name, dss_filename, logger):
 						myfile.write(ami_message)
 
 
+def _get_microgrid_load_series(data, mg_name, reopt_dirname, logger):
+	'''
+	Return the full load series for the loads assigned to a specific microgrid.
+	Falls back to the legacy REopt load shape file if the microgrid loads cannot be resolved.
+	'''
+	assert isinstance(data, MappingProxyType)
+	assert isinstance(mg_name, str)
+	assert isinstance(reopt_dirname, str)
+	assert isinstance(logger, logging.Logger)
+	try:
+		load_df = pd.read_csv('loads.csv')
+		# Remove hour-index columns such as 1..8760 or 0..8759.
+		timeseries_signature_1 = ((8760 ** 2) + 8760) / 2
+		timeseries_signature_2 = ((8759 ** 2) + 8759) / 2
+		load_df = load_df.iloc[:, [
+			np.sum(load_df[col]) != timeseries_signature_1 and np.sum(load_df[col]) != timeseries_signature_2
+			for col in load_df.columns
+		]]
+		load_df.columns = [str(col).lower() for col in load_df.columns]
+		mg_loads = [str(load_name).lower() for load_name in data['MICROGRIDS'][mg_name].get('loads', []) if load_name]
+		resolved_loads = [load_name for load_name in mg_loads if load_name in load_df.columns]
+		if resolved_loads:
+			load_series = load_df[resolved_loads].apply(sum, axis=1).clip(lower=0)
+			return load_series.astype(np.float64)
+		missing = [load_name for load_name in mg_loads if load_name not in load_df.columns]
+		if missing:
+			msg = f'Could not find these microgrid load columns in loads.csv for {mg_name}: {missing}. Falling back to loadShape.csv.'
+			print(msg)
+			logger.warning(msg)
+	except Exception as e:
+		msg = f'Failed to calculate microgrid-specific load series for {mg_name}: {e}. Falling back to loadShape.csv.'
+		print(msg)
+		logger.warning(msg)
+	return pd.read_csv(reopt_dirname + '/loadShape.csv', header=None, dtype=np.float64)[0]
+
+
 def _microgrid_report_csv(data, mg_name, outputCsvName, logger):
 	'''
 	Generate a report on each microgrid
@@ -917,7 +953,7 @@ def _microgrid_report_csv(data, mg_name, outputCsvName, logger):
 	# 	min_outage = int(round(min_outage))
 	# print(f'Minimum Outage Survived (h) for {mg_name}:', min_outage)
 	year_one_emissions_reduced = output_data.get(f'yearOneEmissionsReducedPercent1', 0)
-	load_series = pd.read_csv(reopt_dirname + '/loadShape.csv', header=None, dtype=np.float64)[0]
+	load_series = _get_microgrid_load_series(data, mg_name, reopt_dirname, logger)
 	critical_load_series = pd.read_csv(reopt_dirname + '/criticalLoadShape.csv', header=None, dtype=np.float64)[0]
 	csv_data = (
 		('Microgrid Name', mg_name),
@@ -1025,7 +1061,7 @@ def _make_chart(csvName, circuitFilePath, category_name, x, y_list, year, qsts_s
 	for ob_name in set(gen_data[category_name]):
 		# csv_column_headers = y_list
 		# search the tree of the updated circuit to find the phases associate with ob_name
-		dss_ob_name = ob_name.split('-')[1]
+		dss_ob_name = ob_name.split('-', 1)[1]
 		the_object = _getByName(tree, dss_ob_name)
 		# create phase list, removing neutral phases
 		phase_ids = the_object.get('bus1','').replace('.0','').split('.')[1:]

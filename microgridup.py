@@ -427,7 +427,7 @@ def _build_cost_breakdown_chart(stats, legend_spec, chart_height):
 		legend=legend_spec,
 		barmode='stack',
 		yaxis={'tickprefix': "$"},
-		xaxis={'title': 'Microgrid'},
+		xaxis={},
 		font=dict(
 			family="sans-serif",
 			color="black"
