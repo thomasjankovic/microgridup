@@ -1,4 +1,5 @@
 import os, json, shutil, statistics, logging
+import requests
 import tempfile
 from types import MappingProxyType
 from pathlib import Path
@@ -11,6 +12,123 @@ import microgridup_hosting_cap
 from omf.models import microgridDesign, __neoMetaModel__
 import omf.solvers.reopt_jl as reopt_jl
 import concurrent.futures
+
+
+def _wind_toolkit_covers(lat, lon):
+	'''Return True if the NREL Wind Toolkit API serves data for (lat, lon).
+	Makes a lightweight probe request and treats HTTP 400 as "not covered".'''
+	api_key = reopt_jl.get_randomized_api_key()
+	url = (
+		'https://developer.nrel.gov/api/wind-toolkit/v2/wind/wtk-srw-download'
+		f'?api_key={api_key}&lat={lat}&lon={lon}&hubheight=80&year=2012'
+	)
+	try:
+		r = requests.get(url, stream=True, timeout=15)
+		r.close()
+		return r.status_code != 400
+	except Exception:
+		return False
+
+
+def _fetch_pirate_wind_10m(lat, lon, year=2012):
+	'''Fetch 8760 hourly wind resource data from PirateWeather for a full
+	calendar year, using a thread pool to issue all 365 daily requests in
+	parallel (much faster than the sequential pullPirateWeather helper).
+
+	Returns a dict with keys: speed (m/s at 10m), direction (degrees),
+	temp_c (Celsius), pressure_mb (millibars).
+
+	Results are cached in microgridup's data directory keyed by lat/lon/year so
+	subsequent runs for the same location are instant.'''
+	from pandas import date_range as _date_range
+	cache_path = Path(microgridup.MGU_DIR) / 'data' / 'pirate_wind_cache'
+	cache_path.mkdir(parents=True, exist_ok=True)
+	cache_file = cache_path / f'{lat:.4f}_{lon:.4f}_{year}.json'
+	if cache_file.exists():
+		with open(cache_file) as f:
+			cached = json.load(f)
+		if isinstance(cached, dict) and 'speed' in cached:
+			return cached
+		cache_file.unlink()  # old list-only format, re-fetch with all fields
+	api_key = 'xclxUibBDfg2pVwjHkfDBVVyMrFTTfc0'  # PirateWeather key from omf/weather.py
+	coords = f'{lat:.2f},{lon:.2f}'
+	urls = [
+		f'https://timemachine.pirateweather.net/forecast/{api_key}/{coords},'
+		f'{t.isoformat()}?exclude=daily&units=si'
+		for t in _date_range(f'{year}-01-01', f'{year}-12-31')
+	]
+	def _fetch_day(url):
+		try:
+			r = requests.get(url, timeout=60)
+			r.raise_for_status()
+			hourly = r.json()['hourly']['data']
+			return {
+				'speed': [float(h.get('windSpeed') or 0.0) for h in hourly],
+				'direction': [float(h.get('windBearing') or 180.0) for h in hourly],
+				'temp_c': [float(h['temperature']) if h.get('temperature') is not None else 15.0 for h in hourly],
+				'pressure_mb': [float(h.get('pressure') or 1013.25) for h in hourly],
+				'_ok': True,
+			}
+		except Exception:
+			return {'speed': [0.0]*24, 'direction': [180.0]*24, 'temp_c': [15.0]*24, 'pressure_mb': [1013.25]*24, '_ok': False}
+	with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+		days = list(pool.map(_fetch_day, urls))
+	failed = sum(1 for day in days if not day['_ok'])
+	if failed == len(days):
+		raise RuntimeError('All PirateWeather requests failed — no wind data retrieved.')
+	if failed > len(days) * 0.1:
+		raise RuntimeError(
+			f'Too many PirateWeather requests failed ({failed}/{len(days)} days). '
+			'Check network connectivity and retry.'
+		)
+	result = {k: [v for day in days for v in day[k]] for k in ('speed', 'direction', 'temp_c', 'pressure_mb')}
+	# Trim to 8760 hours (non-leap year length expected by REopt)
+	for k in result:
+		result[k] = result[k][:8760]
+	with open(cache_file, 'w') as f:
+		json.dump(result, f)
+	return result
+
+
+def _maybe_inject_wind_speed_fallback(reopt_dirname, lat, lon, logger):
+	'''If wind is enabled in reopt_dirname but Wind Toolkit does not cover
+	(lat, lon), fetch hourly wind resource from PirateWeather and write all four
+	resource arrays (speed, direction, temperature, pressure) to allInputData.json.
+	microgridDesign.py reads those keys and passes them to REopt, bypassing the
+	Wind Toolkit API call entirely.
+
+	REopt requires all four resource arrays to bypass Wind Toolkit — providing
+	only wind speed is not sufficient. PirateWeather wind speed at 10 m is scaled
+	to 80 m hub height via the power-law shear model (alpha = 1/7).'''
+	with open(f'{reopt_dirname}/allInputData.json') as f:
+		allInputData = json.load(f)
+	if not allInputData.get('wind') or float(allInputData.get('windMax', 0)) <= 0:
+		return
+	if _wind_toolkit_covers(lat, lon):
+		return
+	logger.warning(
+		f'Wind Toolkit does not cover ({lat:.4f}, {lon:.4f}). '
+		'Fetching wind speed fallback from PirateWeather.'
+	)
+	try:
+		wind_data = _fetch_pirate_wind_10m(lat, lon)
+	except Exception as e:
+		logger.warning(
+			f'PirateWeather wind fetch failed: {e}. '
+			'Proceeding without wind speed data — REopt will attempt Wind Toolkit and may fail.'
+		)
+		return
+	shear_factor = (80 / 10) ** (1 / 7)
+	allInputData['windMetersPerSec'] = [round(v * shear_factor, 4) for v in wind_data['speed']]
+	allInputData['windDirectionDegrees'] = [round(v, 2) for v in wind_data['direction']]
+	allInputData['windTemperatureCelsius'] = [round(v, 2) for v in wind_data['temp_c']]
+	allInputData['windPressureAtmospheres'] = [round(v / 1013.25, 6) for v in wind_data['pressure_mb']]
+	with open(f'{reopt_dirname}/allInputData.json', 'w') as f:
+		json.dump(allInputData, f, indent=4)
+	logger.info(
+		f'Injected {len(allInputData["windMetersPerSec"])}-point wind resource from PirateWeather '
+		f'into {reopt_dirname}.'
+	)
 
 
 def run_reopt(data, logger, invalidate_cache):
@@ -135,6 +253,7 @@ def create_economic_microgrid(data, logger, invalidate_cache):
 			allInputData['genExisting'] += float(in_data['genExisting'])
 		with open('reopt_mgEconomic/allInputData.json', 'w') as f:
 			json.dump(allInputData, f, indent=4)
+		_maybe_inject_wind_speed_fallback('reopt_mgEconomic', lat, lon, logger)
 		__neoMetaModel__.runForeground('reopt_mgEconomic')
 		_microgrid_design_output('reopt_mgEconomic', logger)
 
@@ -202,6 +321,7 @@ def _run(data, mg_name, logger, invalidate_cache):
 	_set_allinputdata_wind_parameters(reopt_dirname, existing_generation_dict['wind_kw_existing'])
 	_set_allinputdata_generator_parameters(reopt_dirname, existing_generation_dict['fossil_kw_existing'])
 	# - Run REopt
+	_maybe_inject_wind_speed_fallback(reopt_dirname, lat, lon, logger)
 	omf.models.__neoMetaModel__.runForeground(reopt_dirname)
 	# - Write output
 	_microgrid_design_output(reopt_dirname, logger)
@@ -385,7 +505,9 @@ def _set_allinputdata_battery_parameters(reopt_dirname, battery_kw_existing, bat
 		critical_load_series = pd.read_csv(reopt_dirname + '/criticalLoadShape.csv', header=None)[0]
 		outage_start_hour = int(allInputData['outage_start_hour'])
 		outage_duration = int(allInputData['outageDuration'])
-		calculated_max_kwh = float(critical_load_series[outage_start_hour:outage_start_hour + outage_duration].sum())
+		# REopt enforces a 20% minimum SOC floor, so only 80% of installed capacity is usable.
+		# Divide by 0.8 so the cap is always large enough that 80% of it covers the full critical load.
+		calculated_max_kwh = float(critical_load_series[outage_start_hour:outage_start_hour + outage_duration].sum()) / 0.8
 		if calculated_max_kwh < float(allInputData['batteryCapacityMax']):
 			allInputData['batteryCapacityMax'] = calculated_max_kwh
 		# - allInputData['batteryPowerMax'] is set in set_allinputdata_user_parameters()
@@ -772,6 +894,7 @@ def _create_production_factor_series_csv(data, logger, invalidate_cache):
 		allInputData['fossil'] = False
 		with open('reopt_loadshapes/allInputData.json', 'w') as f:
 			json.dump(allInputData, f, indent=4)
+		_maybe_inject_wind_speed_fallback('reopt_loadshapes', lat, lon, logger)
 		__neoMetaModel__.runForeground('reopt_loadshapes')
 		# Read results.json if it exists, otherwise handle failure gracefully.
 		results = {}
