@@ -471,6 +471,7 @@
                     <h5>Battery</h5>
                     <div id='batteryCapacityCost'></div>
                     <div id='batteryCapacityMax'></div>
+                    <div id='batterySocMinFraction'></div>
                     <div id='batteryCapacityMin'></div>
                     <div id='batteryPowerCost'></div>
                     <div id="batteryPowerMax"></div>
@@ -1739,8 +1740,8 @@
 			'Project Name',
 			'MicrogridUp:MODEL_DIR',
 			'MODEL_DIR',
-			'A project name must be unique and can only include (1) lowercase alphanumeric characters, (2) "-", and (3) "_". ',
-			/^[a-z0-9\-_]+$/));
+			'A project name must be unique and can only include (1) lowercase letters (a-z), (2) digits (0-9), and (3) hyphens ("-"). Underscores and spaces are not allowed.',
+			/^[a-z0-9\-]+$/));
 	const reoptValidationController = new REoptParametersController(reoptValidationModel);
 	// - Get the actual parameter values from allInputData.json and use them to set the values of the dynamically inputs
 	const parameters = Object.entries(in_data.REOPT_INPUTS);
@@ -1812,6 +1813,15 @@
 	// - Override submitEverything to add validation
 	const originalSubmitEverything = submitEverything;
 	submitEverything = async function() {
+		// Validate MODEL_DIR: must match backend pattern (lowercase letters, digits, hyphens only)
+		const modelDirInput = document.querySelector('input[name="MODEL_DIR"]');
+		if (modelDirInput) {
+			const modelDir = modelDirInput.value;
+			if (!/^[a-z0-9-]+$/.test(modelDir)) {
+				alert('Project name may only contain lowercase letters (a-z), digits (0-9), and hyphens ("-"). Underscores, spaces, and other special characters are not allowed.\n\nExample: "my-project-1" is valid. "my_project" is not.');
+				return;
+			}
+		}
 		// Validate LOAD_GROWTH_SPECIFIC
 		const growthSpecificTextarea = document.querySelector('[name="LOAD_GROWTH_SPECIFIC"]');
 		if (growthSpecificTextarea && growthSpecificTextarea.value.trim()) {

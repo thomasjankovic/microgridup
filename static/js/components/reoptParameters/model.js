@@ -179,6 +179,13 @@ class REoptParameters extends Observable {
                                                 'Specify the maximum desired battery capacity in kWh.',
                                                 1.0e6,
                                                 0),
+                soc_min_fraction:           new REoptFloatParameter(
+                                                'Battery Min State of Charge (0–1)',
+                                                'ElectricStorage:soc_min_fraction',
+                                                'batterySocMinFraction',
+                                                'Minimum state of charge (SOC) that REopt maintains in the battery at all times during an outage, expressed as a fraction (0–1). The default of 0.2 reflects real-world depth-of-discharge limits for lithium-ion batteries, which degrade faster with deep cycling. Set to 0.0 for storage technologies that support full discharge, such as pumped hydro, compressed air energy storage (CAES), or iron-air batteries.',
+                                                1.0,
+                                                0),
                 mgu_enabled:                new REoptBooleanParameter(
                                                 'Batteries',
                                                 'ElectricStorage:mgu_enabled',

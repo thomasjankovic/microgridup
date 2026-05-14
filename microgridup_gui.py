@@ -196,6 +196,11 @@ def edit(project):
 		for s in json.loads(in_data['jsCircuitModel']):
 			jsCircuitModel.append(json.loads(s))
 		in_data['jsCircuitModel'] = jsCircuitModel
+	# Inject defaults for any REOPT_INPUTS keys added after a project was created (backwards compatibility).
+	reopt_defaults = {'batterySocMinFraction': 0.2}
+	for key, default in reopt_defaults.items():
+		if key not in in_data.get('REOPT_INPUTS', {}):
+			in_data.setdefault('REOPT_INPUTS', {})[key] = default
 	return render_template('template_new.html', in_data=in_data, iframe_mode=False, editing=True)
 
 @app.route('/delete/<project>')
@@ -731,6 +736,7 @@ def _get_reopt_inputs(data):
 		'solarItcPercent':              float(data['solarItcPercent']),
 		'batteryCapacityCost':          float(data['batteryCapacityCost']),
 		'batteryCapacityMax':           float(data['batteryCapacityMax']),
+		'batterySocMinFraction':        float(data.get('batterySocMinFraction', 0.2)),
 		'batteryCapacityMin':           float(data['batteryCapacityMin']),
 		'batteryPowerCost':             float(data['batteryPowerCost']),
 		'batteryPowerMax':              float(data['batteryPowerMax']),

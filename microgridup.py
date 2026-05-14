@@ -827,6 +827,7 @@ def _tests():
 			'solarItcPercent': 0.26,
 			'batteryCapacityCost': 420.0,
 			'batteryCapacityMax': 100000.0,
+			'batterySocMinFraction': 0.2,
 			'batteryCapacityMin': 0.0,
 			'batteryPowerCost': 840.0,
 			'batteryPowerMax': 10000.0,
