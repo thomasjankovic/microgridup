@@ -505,9 +505,10 @@ def _set_allinputdata_battery_parameters(reopt_dirname, battery_kw_existing, bat
 		critical_load_series = pd.read_csv(reopt_dirname + '/criticalLoadShape.csv', header=None)[0]
 		outage_start_hour = int(allInputData['outage_start_hour'])
 		outage_duration = int(allInputData['outageDuration'])
-		# REopt enforces a 20% minimum SOC floor, so only 80% of installed capacity is usable.
-		# Divide by 0.8 so the cap is always large enough that 80% of it covers the full critical load.
-		calculated_max_kwh = float(critical_load_series[outage_start_hour:outage_start_hour + outage_duration].sum()) / 0.8
+		soc_min_fraction = float(allInputData.get('batterySocMinFraction', 0.2))
+		# REopt reserves soc_min_fraction of installed capacity as an untouchable floor during outages.
+		# Divide by the usable fraction so the cap always covers the full critical load after the floor is applied.
+		calculated_max_kwh = float(critical_load_series[outage_start_hour:outage_start_hour + outage_duration].sum()) / (1.0 - soc_min_fraction)
 		if calculated_max_kwh < float(allInputData['batteryCapacityMax']):
 			allInputData['batteryCapacityMax'] = calculated_max_kwh
 		# - allInputData['batteryPowerMax'] is set in set_allinputdata_user_parameters()
