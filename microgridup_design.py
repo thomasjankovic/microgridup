@@ -19,7 +19,7 @@ def _wind_toolkit_covers(lat, lon):
 	Makes a lightweight probe request and treats HTTP 400 as "not covered".'''
 	api_key = reopt_jl.get_randomized_api_key()
 	url = (
-		'https://developer.nrel.gov/api/wind-toolkit/v2/wind/wtk-srw-download'
+		'https://developer.nlr.gov/api/wind-toolkit/v2/wind/wtk-srw-download'
 		f'?api_key={api_key}&lat={lat}&lon={lon}&hubheight=80&year=2012'
 	)
 	try:
@@ -41,7 +41,7 @@ def _fetch_pirate_wind_10m(lat, lon, year=2012):
 	Results are cached in microgridup's data directory keyed by lat/lon/year so
 	subsequent runs for the same location are instant.'''
 	from pandas import date_range as _date_range
-	cache_path = Path(microgridup.MGU_DIR) / 'data' / 'pirate_wind_cache'
+	cache_path = Path(microgridup.PROJ_DIR).parent / 'pirate_wind_cache'
 	cache_path.mkdir(parents=True, exist_ok=True)
 	cache_file = cache_path / f'{lat:.4f}_{lon:.4f}_{year}.json'
 	if cache_file.exists():
