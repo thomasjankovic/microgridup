@@ -87,6 +87,7 @@ def main(data, invalidate_cache=True, open_results=False):
 	}
 	if 'jsCircuitModel' in data:
 		inputs['jsCircuitModel'] = data['jsCircuitModel']
+	inputs['circuitSource'] = 'wizard' if 'jsCircuitModel' in data else 'uploaded'
 	# - Set up the model directory and environment
 	# Create initial files.
 	if not os.path.isdir(absolute_model_directory):
@@ -802,6 +803,10 @@ def _tests():
 		'BASE_DSS': '<replace_me>',
 		'LOAD_CSV': f'{MGU_DIR}/testfiles/lehigh_load.csv',
 		'QSTS_STEPS': 480,
+		'LOAD_GROWTH_PERCENT': 0.0,
+		'LOAD_GROWTH_SPECIFIC': {},
+		'ADDITIONAL_LOADSHAPE_CSV': None,
+		'ADDITIONAL_LOADSHAPE_METER': '',
 		'REOPT_INPUTS': {
 			'energyCost': 0.12,
 			'wholesaleCost': 0.034,
