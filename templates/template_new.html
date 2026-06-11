@@ -35,6 +35,44 @@
 		.chunk > input:last-child, .chunk > select:last-child {
 			margin-left: .5rem;
 		}
+		.multiSelectDropdown {
+			position: relative;
+			display: inline-block;
+			margin: 4px 8px 4px 0;
+			vertical-align: top;
+		}
+		.multiSelectToggle {
+			text-align: left;
+		}
+		.multiSelectPanel {
+			position: absolute;
+			top: 100%;
+			left: 0;
+			z-index: 10;
+			background: white;
+			border: 1px solid #ccc;
+			border-radius: 4px;
+			box-shadow: 2px 2px 6px rgba(0,0,0,0.15);
+			max-height: 240px;
+			overflow-y: auto;
+			min-width: 220px;
+			padding: 4px;
+		}
+		.multiSelectOption {
+			display: block;
+			padding: 3px 6px;
+			white-space: nowrap;
+			cursor: pointer;
+		}
+		.multiSelectOption:hover {
+			background: #f0f0f0;
+		}
+		.multiSelectOption--disabled {
+			color: #999;
+			opacity: 0.5;
+			cursor: not-allowed;
+			pointer-events: none;
+		}
 		#stepThree {
 			margin-left: 5px;
 		}
@@ -637,6 +675,98 @@
 		}
 	}
 
+	/** Create a button that checks every checkbox in the given critical loads form when clicked. */
+	function createSelectAllCriticalLoadsButton(criticalLoadsForm) {
+		const selectAllButton = document.createElement('button');
+		selectAllButton.type = 'button';
+		selectAllButton.textContent = 'Select All';
+		selectAllButton.addEventListener('click', function() {
+			criticalLoadsForm.querySelectorAll('input[type="checkbox"]').forEach(checkbox => checkbox.checked = true);
+		});
+		return selectAllButton;
+	}
+
+	/** Re-derive checked/disabled state of every load-assignment checkbox, across every microgrid's
+	 *  multi-select widget, from window.loadAssignmentState (the canonical source of truth). A load
+	 *  assigned to one microgrid is shown checked there and disabled/grayed-out everywhere else,
+	 *  which is what enforces "a load belongs to at most one microgrid." */
+	function refreshLoadAssignmentDisabledStates() {
+		document.querySelectorAll('#loadAssignmentContainer .multiSelectDropdown').forEach(dropdown => {
+			const ownerMgId = dropdown.dataset.mgId;
+			let selectedCount = 0;
+			dropdown.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+				const loadId = checkbox.dataset.loadId;
+				const assignedTo = window.loadAssignmentState[loadId];
+				const isAssignedElsewhere = assignedTo !== null && assignedTo !== ownerMgId;
+				checkbox.checked = (assignedTo === ownerMgId);
+				checkbox.disabled = isAssignedElsewhere;
+				checkbox.closest('label').classList.toggle('multiSelectOption--disabled', isAssignedElsewhere);
+				if (checkbox.checked) {
+					selectedCount++;
+				}
+			});
+			const toggle = dropdown.querySelector('.multiSelectToggle');
+			toggle.textContent = `${ownerMgId} (${selectedCount} selected) ▾`;
+		});
+	}
+
+	/** Build a checkbox multi-select "dropdown" that lets the user assign any number of loads
+	 *  to a single microgrid. Stays open while checking multiple loads; closes only on click-away
+	 *  (see the shared document click handler attached the first time a widget is built). */
+	function createLoadMultiSelectDropdown(mgId, loads) {
+		const dropdown = document.createElement('div');
+		dropdown.classList.add('multiSelectDropdown');
+		dropdown.dataset.mgId = mgId;
+
+		const toggle = document.createElement('button');
+		toggle.type = 'button';
+		toggle.classList.add('multiSelectToggle');
+		toggle.textContent = `${mgId} (0 selected) ▾`;
+		toggle.addEventListener('click', function(event) {
+			event.stopPropagation(); // Prevent the document click-away handler from immediately closing the panel we're opening.
+			const opening = panel.hidden;
+			document.querySelectorAll('#loadAssignmentContainer .multiSelectPanel').forEach(p => { p.hidden = true; });
+			panel.hidden = !opening;
+		});
+		dropdown.appendChild(toggle);
+
+		const panel = document.createElement('div');
+		panel.classList.add('multiSelectPanel');
+		panel.hidden = true;
+		for (let i = 0; i < loads.length; i++) {
+			const label = document.createElement('label');
+			label.classList.add('multiSelectOption');
+			const checkbox = document.createElement('input');
+			checkbox.type = 'checkbox';
+			checkbox.dataset.loadId = loads[i];
+			checkbox.dataset.mgId = mgId;
+			checkbox.addEventListener('change', function() {
+				window.loadAssignmentState[this.dataset.loadId] = this.checked ? mgId : null;
+				refreshLoadAssignmentDisabledStates();
+			});
+			label.appendChild(checkbox);
+			label.appendChild(document.createTextNode(loads[i]));
+			panel.appendChild(label);
+		}
+		dropdown.appendChild(panel);
+
+		// Attach the click-away-to-close handler exactly once for the page's lifetime; it re-queries
+		// the live set of widgets each time it fires, so it works regardless of how many times the
+		// widgets are rebuilt (e.g. the user changes the microgrid quantity and clicks "Go" again).
+		if (!window.multiSelectOutsideClickAttached) {
+			document.addEventListener('click', function(event) {
+				document.querySelectorAll('#loadAssignmentContainer .multiSelectDropdown').forEach(otherDropdown => {
+					if (!otherDropdown.contains(event.target)) {
+						otherDropdown.querySelector('.multiSelectPanel').hidden = true;
+					}
+				});
+			});
+			window.multiSelectOutsideClickAttached = true;
+		}
+
+		return dropdown;
+	}
+
 	/** Populate critical load selection div if editing an existing circuit. */
 	async function getLoadsFromExistingFile(MODEL_DIR, criticalLoads) {
 		try {
@@ -653,6 +783,7 @@
 			}
 			window.circuitIsSpecified = true;
 			const loads = responseJson.loads;
+			window.loadsList = loads;
 			const critLoadsContainer = document.getElementById('critLoads');
 			const manualPartitioningContainer = document.getElementById('manualPartitioningContainer');
 			// Clear contents of critLoads and manualPartitioningContainer.
@@ -668,6 +799,7 @@
 			const criticalLoadsSelect = document.createElement('form');
 			criticalLoadsSelect.id = 'criticalLoadsSelect';
 			criticalLoadsSelect.classList.add('chunk');
+			critLoadsContainer.appendChild(createSelectAllCriticalLoadsButton(criticalLoadsSelect));
 			critLoadsContainer.appendChild(criticalLoadsSelect);
 			// Create a div to house load assignment dropdown menus.
 			const loadAssignmentContainer = document.createElement('div');
@@ -686,23 +818,13 @@
 				label.appendChild(checkbox);
 				label.appendChild(document.createTextNode(loads[i]));
 				criticalLoadsSelect.appendChild(label);
-				// Add a dropdown to loadAssignmentContainer.
-				const dropdownLabel = document.createElement('label');
-				dropdownLabel.style.display = 'inline-block';
-				dropdownLabel.style.paddingRight = '8px';
-				const dropdown = document.createElement('select');
-				dropdown.dataset.loadId = loads[i];
-				dropdown.style.marginRight = '3px';
-				dropdownLabel.appendChild(dropdown);
-				dropdownLabel.appendChild(document.createTextNode(loads[i]));
-				loadAssignmentContainer.appendChild(dropdownLabel);
 			}
 			// Handle case where there are no loads.
 			if (loads.length === 0) {
 				const noLoadsMessage1 = document.createElement('p');
 				noLoadsMessage1.textContent = 'No loads to select from.';
 				criticalLoadsSelect.appendChild(noLoadsMessage1);
-				
+
 				const noLoadsMessage2 = document.createElement('p');
 				noLoadsMessage2.textContent = 'No loads to assign to microgrids.';
 				manualPartitioningContainer.appendChild(noLoadsMessage2);
@@ -716,6 +838,21 @@
 			alert(error);
 		}
 	}
+
+	/** Reset the partition previewer so the user must redo partitioning against the current circuit. */
+	function resetPartitionPreview() {
+		const oldPartitionsDiv = document.getElementById('oldPartitionDiv');
+		if (!oldPartitionsDiv || oldPartitionsDiv.style.display === 'none') {
+			return;
+		}
+		document.getElementById('stepThree').style.display = 'block';
+		oldPartitionsDiv.style.display = 'none';
+		document.getElementById('previewPartitionsButton').disabled = false;
+		document.getElementById('partitionMethod').disabled = false;
+	}
+	// Exposed so the circuit wizard's "Submit circuit" handler (circuitBuilder.js) can reset the
+	// previewer when the wizard's circuit is committed on the edit flow.
+	window.resetPartitionPreview = resetPartitionPreview;
 
 	/** Show previously selected partitions on edit flow. */
 	async function showOldPartitions(MODEL_DIR, MICROGRIDS, CRITICAL_LOADS) {
@@ -762,12 +899,7 @@
 		partitionButton.textContent = 'Partition circuit differently';
 		partitionButtonContainer.appendChild(partitionButton);
 		oldPartitionsDiv.appendChild(partitionButtonContainer);
-		partitionButton.addEventListener('click', function() {
-			document.getElementById('stepThree').style.display = 'block';
-			oldPartitionsDiv.style.display = 'none';
-			document.getElementById('previewPartitionsButton').disabled = false;
-			document.getElementById('partitionMethod').disabled = false;
-		});
+		partitionButton.addEventListener('click', resetPartitionPreview);
 	}
 
 	/** Check to see if uploaded circuit contains cycles when user clicks 'Go' during manual. */
@@ -914,22 +1046,20 @@
 				}
 				partitioningTextInputContainer.append(document.createElement('br'));
 			}
-			const selects = document.querySelectorAll('#manualPartitioningContainer label select');
-			selects.forEach(select => {
-				select.innerHTML = ''; 			
-				const noneOption = document.createElement('option');
-				noneOption.value = 'None';
-				noneOption.textContent = 'None';
-				noneOption.dataset.mgId = 'None';
-				select.appendChild(noneOption);
+			// Build one multi-select widget per microgrid, each listing every load as a checkbox.
+			// Rebuilding from scratch resets prior assignments, which mirrors the old per-load
+			// dropdown behavior (it also reset to 'None' on every rebuild) and avoids dangling
+			// references to microgrids that no longer exist if the user lowers the quantity.
+			const loadAssignmentContainer = document.getElementById('loadAssignmentContainer');
+			if (window.loadsList.length > 0) {
+				loadAssignmentContainer.innerHTML = '';
+				window.loadAssignmentState = {};
+				window.loadsList.forEach(loadName => { window.loadAssignmentState[loadName] = null; });
 				for (let idx = 0; idx < numMgs; idx++) {
-					const option = document.createElement('option');
-					option.value = `Mg${idx}`;
-					option.textContent = `Mg${idx}`;
-					option.dataset.mgId = `mg${idx}`;
-					select.appendChild(option);
+					loadAssignmentContainer.appendChild(createLoadMultiSelectDropdown(`mg${idx}`, window.loadsList));
 				}
-			});
+				refreshLoadAssignmentDisabledStates();
+			}
 			manualPartitioningContainer.style.display = 'block';
 		})
 		// Also call above function if user presses enter.
@@ -1153,11 +1283,10 @@
 		if ((selectedPartitioningMethod == 'loadGrouping') || (selectedPartitioningMethod == 'manual')) {
 			// Add all load->microgrid assignments to PARTITION_PARAMS.pairings object.
 			// Add all mg ids that user has assigned loads to to PARTITION_PARAMS.ids set.
-			const loadAssignmentContainerSelects = document.querySelectorAll('#loadAssignmentContainer select');
-			loadAssignmentContainerSelects.forEach(select => {
-				const loadId = select.dataset.loadId;
-				const selectedOption = select.options[select.selectedIndex];
-				const selectedMicrogridId = selectedOption.dataset.mgId;
+			// window.loadAssignmentState (loadName -> mgId|null) is the canonical source of truth;
+			// refreshLoadAssignmentDisabledStates keeps each checkbox's checked state in sync with it.
+			Object.entries(window.loadAssignmentState).forEach(([loadId, assignedMgId]) => {
+				const selectedMicrogridId = assignedMgId === null ? 'None' : assignedMgId;
 				PARTITION_PARAMS.pairings[selectedMicrogridId] = PARTITION_PARAMS.pairings[selectedMicrogridId] || [];
 				PARTITION_PARAMS.pairings[selectedMicrogridId].push(loadId);
 				PARTITION_PARAMS.ids.add(selectedMicrogridId);
@@ -1290,6 +1419,8 @@
 	window.circuitIsSpecified = false;
 	window.filename = '';
 	window.onEditFlow = false;
+	window.loadsList = []; // Cached full list of load names, set once known so the manual/loadGrouping "Go" handler can build per-microgrid multi-select widgets later.
+	window.loadAssignmentState = {}; // Canonical loadName -> mgId|null map driving the multi-select widgets and submit-time PARTITION_PARAMS.pairings collection.
 
 	document.addEventListener('DOMContentLoaded', function() {
 		// Clone partitioning div for resetting.
@@ -1440,9 +1571,6 @@
 		});
 		// If user clicked edit, show used circuit.
 		if (document.getElementById('circuitPostCreation')) {
-			document.getElementById('circuitUpload').style.display = 'block';
-			document.getElementById('upload').checked = true;
-			document.getElementById('wizard').disabled = true;
 			window.circuitIsSpecified = true;
 			window.filename = document.getElementById('circuitPostCreation').value;
 			const MODEL_DIR = document.getElementsByName('MODEL_DIR')[0].value;
@@ -1451,6 +1579,33 @@
 			const inData = JSON.parse('{{ in_data | tojson | safe }}');
 			const CRITICAL_LOADS = inData['CRITICAL_LOADS'];
 			const MICROGRIDS = inData['MICROGRIDS'];
+			// Stash saved wizard elements so the post-circuitModel-init block (below) can load them.
+			window.editFlowJsCircuitModel = (Array.isArray(inData['jsCircuitModel']) && inData['jsCircuitModel'].length > 0)
+				? inData['jsCircuitModel']
+				: null;
+			if (window.editFlowJsCircuitModel) {
+				// Wizard circuit: pre-select the wizard radio and load the saved elements into
+				// circuitModel. By the time DOMContentLoaded fires, the module script that
+				// creates window.circuitModel has already run, so it's safe to use here.
+				document.getElementById('wizard').checked = true;
+				document.getElementById('circuitCreator').style.display = 'block';
+				for (const props of window.editFlowJsCircuitModel) {
+					window.circuitModel.addElement(new window.CircuitElement(props));
+				}
+				// Refresh outage location options from loaded topology, then re-apply saved faulted lines.
+				window.outageLocationInputView.updateInput();
+				window.outageLocationInputView.setValue("{{','.join(in_data.FAULTED_LINES)}}");
+				// Load the existing loads.csv into the wizard's CSV parser so the "add load" dropdown is populated.
+				fetch(`/rfile/${MODEL_DIR}/loads.csv`)
+					.then(response => response.blob())
+					.then(blob => window.csvLoadParser.parseCsv(new File([blob], 'loads.csv', { type: 'text/csv' })))
+					.catch(error => alert(error));
+			} else {
+				// Uploaded circuit: existing behavior unchanged.
+				document.getElementById('circuitUpload').style.display = 'block';
+				document.getElementById('upload').checked = true;
+				document.getElementById('wizard').disabled = true;
+			}
 			// Also populate critical load selection div.
 			getLoadsFromExistingFile(MODEL_DIR, CRITICAL_LOADS);
 			// Also populate partitioning preview div from original run.
@@ -1502,6 +1657,7 @@
 				document.getElementById('partitionMethod').disabled = false;
 				window.circuitIsSpecified = true;
 				const loads = responseJson.loads;
+				window.loadsList = loads;
 				// Clear critLoads.
 				const critLoadsContainer = document.getElementById('critLoads');
 				critLoadsContainer.innerHTML = '';
@@ -1517,6 +1673,7 @@
 				const criticalLoadsSelect = document.createElement('form');
 				criticalLoadsSelect.id = 'criticalLoadsSelect';
 				criticalLoadsSelect.classList.add('chunk');
+				critLoadsContainer.appendChild(createSelectAllCriticalLoadsButton(criticalLoadsSelect));
 				critLoadsContainer.appendChild(criticalLoadsSelect);
 				// Create a div to house load assignment dropdown menus.
 				const loadAssignmentContainer = document.createElement('div');
@@ -1532,16 +1689,6 @@
 					label.appendChild(checkbox);
 					label.appendChild(document.createTextNode(loads[i]));
 					criticalLoadsSelect.appendChild(label);
-					// Add a dropdown to loadAssignmentContainer.
-					const dropdownLabel = document.createElement('label');
-					dropdownLabel.style.display = 'inline-block';
-					dropdownLabel.style.paddingRight = '8px';
-					const dropdown = document.createElement('select');
-					dropdown.style.marginRight = '3px';
-					dropdown.dataset.loadId = loads[i];
-					dropdownLabel.appendChild(dropdown);
-					dropdownLabel.appendChild(document.createTextNode(loads[i]));
-					loadAssignmentContainer.appendChild(dropdownLabel);
 				}
 				// Handle the case where there are no loads.
 				if (loads.length === 0) {

@@ -586,7 +586,7 @@ def run():
 	# - Format faulted lines
 	data['FAULTED_LINES'] = data['FAULTED_LINES'].split(',')
 	# - Create microgrids here and not in microgridup.main because it's easier to format the testing data
-	data['MICROGRIDS'] = _get_microgrids(data['CRITICAL_LOADS'], data['MG_DEF_METHOD'], data['mgQuantity'], data['BASE_DSS'], data['PARTITION_PARAMS'])
+	data['MICROGRIDS'] = _get_microgrids(data['CRITICAL_LOADS'], data['MG_DEF_METHOD'], data['mgQuantity'], data['BASE_DSS'], data['PARTITION_PARAMS'], is_wizard_circuit='jsCircuitModel' in data)
 	# Validate that intended microgrids (from PARTITION_PARAMS.mg_name) actually exist in data['MICROGRIDS']
 	try:
 		partition_params = json.loads(request.form.get('PARTITION_PARAMS', '{}'))
@@ -768,7 +768,7 @@ def _get_reopt_inputs(data):
 		del data[k]
 	return reopt_inputs
 
-def _get_microgrids(critical_loads, partition_method, quantity, dss_path, partition_params_json):
+def _get_microgrids(critical_loads, partition_method, quantity, dss_path, partition_params_json, is_wizard_circuit=False):
 	'''
 	:param critical_loads: a list of critical loads
 	:type critical_loads: list
@@ -805,12 +805,12 @@ def _get_microgrids(critical_loads, partition_method, quantity, dss_path, partit
 	elif partition_method == 'loadGrouping':
 		algo_params = json.loads(partition_params_json)
 		mg_groups = form_mg_groups(G, critical_loads, 'loadGrouping', algo_params)
-		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json)
+		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json, strict_feeder_check=is_wizard_circuit)
 		microgrids = form_microgrids(G, mg_groups, omd, switch_dict=algo_params.get('switch', None), gen_bus_dict=algo_params.get('gen_bus', None), mg_name_dict=algo_params.get('mg_name', None))
 	elif partition_method == 'manual':
 		algo_params = json.loads(partition_params_json)
 		mg_groups = form_mg_groups(G, critical_loads, 'manual', algo_params)
-		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json)
+		_validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=partition_params_json, strict_feeder_check=is_wizard_circuit)
 		microgrids = form_microgrids(G, mg_groups, omd, switch_dict=algo_params.get('switch', None), gen_bus_dict=algo_params.get('gen_bus', None), mg_name_dict=algo_params.get('mg_name', None))
 	elif partition_method == '':
 		microgrids = json.loads(partition_params_json)

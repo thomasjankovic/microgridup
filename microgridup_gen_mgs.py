@@ -520,12 +520,12 @@ def get_edge_name(fr, to, omd_list):
 	# If still not found, raise error.
 	raise SwitchNotFoundError(f'Selected partitioning method produced invalid results. No valid switch found between {fr} and {to}. Please change partitioning parameter(s).')
 
-def _validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=None):
+def _validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_params_json=None, strict_feeder_check=True):
     '''
     Validate that each microgrid group:
       - contains nodes that exist in the graph G,
       - is contained entirely within one weakly-connected component (all nodes reachable if edge directions are ignored) (within same substation's tree),
-      - maps to a single parent bus (feeder) where possible (i.e., does not span multiple feeders).
+      - (wizard circuits only, strict_feeder_check=True) maps to a single parent bus (feeder).
     Raises ValueError on failure.
     '''
     # Map node -> component id
@@ -562,30 +562,31 @@ def _validate_mg_groups_feeders_and_substations(mg_groups, G, omd, partition_par
         if len(comp_ids) > 1:
             problems.append(f'{friendly} ({mg_id}) spans multiple substations/trees; nodes: {nodes}')
             continue
-        # 3) Collect parent buses for all nodes that have them
-        parent_buses = set()
-        for n in nodes:
-            ob = omd_by_name.get(n)
-            if not ob:
-                continue
-            parent = ob.get('parent') or ob.get('bus') or ob.get('bus1') or ob.get('parent_bus')
-            if parent:
-                parent_buses.add(str(parent).split('.')[0])
-        # If we found multiple distinct parent buses, group spans feeders -> problem
-        if len(parent_buses) > 1:
-            problems.append(f'{friendly} ({mg_id}) spans multiple feeder buses: {sorted(parent_buses)}; nodes: {nodes}')
-            continue
-        # If we found no parent buses, ensure at least one member of the group is a bus-type object in omd
-        if len(parent_buses) == 0:
-            found_bus_obj = False
+        if strict_feeder_check:
+            # 3) Collect parent buses for all nodes that have them
+            parent_buses = set()
             for n in nodes:
                 ob = omd_by_name.get(n)
-                if ob and ob.get('object') and ob.get('object').lower() == 'bus':
-                    found_bus_obj = True
-                    break
-            if not found_bus_obj:
-                problems.append(f'{friendly} ({mg_id}) has no identifiable parent bus and contains no bus object; nodes: {nodes}')
+                if not ob:
+                    continue
+                parent = ob.get('parent') or ob.get('bus') or ob.get('bus1') or ob.get('parent_bus')
+                if parent:
+                    parent_buses.add(str(parent).split('.')[0])
+            # If we found multiple distinct parent buses, group spans feeders -> problem
+            if len(parent_buses) > 1:
+                problems.append(f'{friendly} ({mg_id}) spans multiple feeder buses: {sorted(parent_buses)}; nodes: {nodes}')
                 continue
+            # If we found no parent buses, ensure at least one member of the group is a bus-type object in omd
+            if len(parent_buses) == 0:
+                found_bus_obj = False
+                for n in nodes:
+                    ob = omd_by_name.get(n)
+                    if ob and ob.get('object') and ob.get('object').lower() == 'bus':
+                        found_bus_obj = True
+                        break
+                if not found_bus_obj:
+                    problems.append(f'{friendly} ({mg_id}) has no identifiable parent bus and contains no bus object; nodes: {nodes}')
+                    continue
     if problems:
         msg = (
             'Invalid microgrid partitioning: each microgrid must be wholly within a single substation/feeder tree and map to a single feeder bus. Problems found: ' + '; '.join(problems)
