@@ -685,6 +685,9 @@
 		});
 		return selectAllButton;
 	}
+	// Exposed so the circuit wizard's "Submit circuit" handler (circuitBuilder.js) can rebuild
+	// the critical loads selection div with its Select All button.
+	window.createSelectAllCriticalLoadsButton = createSelectAllCriticalLoadsButton;
 
 	/** Re-derive checked/disabled state of every load-assignment checkbox, across every microgrid's
 	 *  multi-select widget, from window.loadAssignmentState (the canonical source of truth). A load
@@ -1595,17 +1598,19 @@
 				// Refresh outage location options from loaded topology, then re-apply saved faulted lines.
 				window.outageLocationInputView.updateInput();
 				window.outageLocationInputView.setValue("{{','.join(in_data.FAULTED_LINES)}}");
-				// Load the existing loads.csv into the wizard's CSV parser so the "add load" dropdown is populated.
-				fetch(`/rfile/${MODEL_DIR}/loads.csv`)
-					.then(response => response.blob())
-					.then(blob => window.csvLoadParser.parseCsv(new File([blob], 'loads.csv', { type: 'text/csv' })))
-					.catch(error => alert(error));
 			} else {
 				// Uploaded circuit: existing behavior unchanged.
 				document.getElementById('circuitUpload').style.display = 'block';
 				document.getElementById('upload').checked = true;
 				document.getElementById('wizard').disabled = true;
 			}
+			// Load the existing loads.csv into the wizard's CSV parser so the "add load" dropdown is populated,
+			// whether the circuit was originally built with the wizard or uploaded (e.g. if the user later
+			// removes an uploaded circuit and switches to "Build circuit manually").
+			fetch(`/rfile/${MODEL_DIR}/loads.csv`)
+				.then(response => response.blob())
+				.then(blob => window.csvLoadParser.parseCsv(new File([blob], 'loads.csv', { type: 'text/csv' })))
+				.catch(error => alert(error));
 			// Also populate critical load selection div.
 			getLoadsFromExistingFile(MODEL_DIR, CRITICAL_LOADS);
 			// Also populate partitioning preview div from original run.
